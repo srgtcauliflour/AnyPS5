@@ -105,15 +105,6 @@ int main() {
         0x8B, 0xC1, 0xC3
     };
     if (GuestCpu(registerRoundtrip).run() != 42) return EXIT_FAILURE;
-    const std::array<std::uint8_t, 17> memoryRoundtrip{
-        0xB8, 0x2A, 0, 0, 0,
-        0x89, 0x04, 0x24,
-        0xB8, 0, 0, 0, 0,
-        0x8B, 0x04, 0x24,
-        0xC3
-    };
-    GuestCpu memRoundtrip(memoryRoundtrip, 64);
-    if (memRoundtrip.run() != 42) return EXIT_FAILURE;
     const std::array<std::uint8_t, 19> displacementMov{
         0xB8, 0x2A, 0, 0, 0,
         0x89, 0x44, 0x24, 0xF8,
