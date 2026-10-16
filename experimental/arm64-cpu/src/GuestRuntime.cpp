@@ -26,7 +26,7 @@ GuestRuntime GuestRuntime::load(std::span<const std::uint8_t> image,
         codeSize > image.size() - 20 || dataSize > image.size() - 20 - codeSize ||
         image.size() != 20 + codeSize + dataSize)
         throw std::invalid_argument("Invalid AG64 image sections or entry");
-    if (dataSize == 0 || dataSize > (1u << 20) || stackSize < 128 ||
+    if (dataSize == 0 || dataSize % 4 != 0 || dataSize > (1u << 20) || stackSize < 128 ||
         stackSize > (1u << 20))
         throw std::invalid_argument("Invalid AG64 data/stack size");
     const auto stackBase = static_cast<std::size_t>(dataBase) + dataSize + 4096;
@@ -35,21 +35,11 @@ GuestRuntime GuestRuntime::load(std::span<const std::uint8_t> image,
                                    image.begin() + 20 + codeSize);
     GuestRuntime runtime(std::move(code), memorySize, dataSize, stackBase);
     // Initialize only mapped data; the guard page is intentionally unmapped.
-    for (std::size_t i = 0; i < dataSize; ++i) {
-        const auto address = dataBase + i;
-        const auto value = image[20 + codeSize + i];
-        // No public byte memory writer yet; write aligned words.
-        // Write the final partial word with zero padding only inside data.
-        if ((i % 4) == 0) {
-            if (dataSize - i >= 4) {
-                std::uint32_t word = 0;
-                for (std::size_t j = 0; j < 4; ++j)
-                    word |= static_cast<std::uint32_t>(image[20 + codeSize + i + j]) << (8 * j);
-                runtime.cpu_.writeMemory32(address, word);
-            } else if (value != 0) {
-                throw std::invalid_argument("AG64 data size must be word aligned");
-            }
-        }
+    for (std::size_t i = 0; i < dataSize; i += 4) {
+        std::uint32_t word = 0;
+        for (std::size_t j = 0; j < 4; ++j)
+            word |= static_cast<std::uint32_t>(image[20 + codeSize + i + j]) << (8 * j);
+        runtime.cpu_.writeMemory32(dataBase + i, word);
     }
     runtime.cpu_.setRegister(4, memorySize);
     // Entry offset is encoded by prepending a near jump in the next
