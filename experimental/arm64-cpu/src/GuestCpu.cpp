@@ -217,7 +217,42 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
         if (wide) operand16 = false;
         // Multi-byte alignment NOPs (0F 1F /0) are decoded below.
         // One-byte NOP and CDQE/CWDE are common compiler output.
-        if (opcode == 0x90 && !operand16 && !hasRex) continue;
+        // 90 is NOP only when the selected register is AX/EAX/RAX.
+        // 90..97 otherwise exchange accumulator and the selected register.
+        // REX.B extends the opcode register to R8..R15.
+        if (opcode >= 0x90 && opcode <= 0x97) {
+            const auto index = static_cast<std::size_t>((opcode - 0x90) + (extended ? 8 : 0));
+            if (index == 0) continue;
+            if (operand16) {
+                const auto left = static_cast<std::uint16_t>(registers_[0]);
+                const auto right = static_cast<std::uint16_t>(registers_[index]);
+                registers_[0] = (registers_[0] & ~UINT64_C(0xFFFF)) | right;
+                registers_[index] = (registers_[index] & ~UINT64_C(0xFFFF)) | left;
+            } else if (wide) {
+                const auto value = registers_[0];
+                registers_[0] = registers_[index];
+                registers_[index] = value;
+            } else {
+                const auto left = static_cast<std::uint32_t>(registers_[0]);
+                const auto right = static_cast<std::uint32_t>(registers_[index]);
+                registers_[0] = right;
+                registers_[index] = left;
+            }
+            continue;
+        }
+        // XCHG r/m32,r32 or r/m64,r64. A memory operand is accessed
+        // only after complete ModR/M decoding; no flag changes.
+        if (!operand16 && opcode == 0x87) {
+            const auto modrm = read8();
+            const auto reg = static_cast<std::size_t>(((modrm >> 3) & 7) + (rexR ? 8 : 0));
+            const auto operand = decodeOperand(modrm, extended, rexX);
+            const auto fromOperand = readOperand(operand, wide);
+            const auto fromRegister = wide ? registers_[reg] :
+                static_cast<std::uint32_t>(registers_[reg]);
+            writeOperand(operand, fromRegister, wide);
+            registers_[reg] = fromOperand;
+            continue;
+        }
         if (opcode == 0x98 && !operand16) {
             if (wide) {
                 const auto value = static_cast<std::uint32_t>(registers_[0]);
