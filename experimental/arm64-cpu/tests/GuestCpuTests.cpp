@@ -479,5 +479,41 @@ int main() {
         return EXIT_FAILURE;
     }
 
+    // Common compiler idiom: XOR EAX,EAX clears the register and sets ZF.
+    const auto xorZero = std::to_array<std::uint8_t>({
+        0xB8, 0xFF, 0xFF, 0xFF, 0xFF,
+        0x31, 0xC0,             // xor eax,eax
+        0x75, 0x01,             // jne -> invalid NOP (must not branch)
+        0xC3, 0x90
+    });
+    if (GuestCpu(xorZero).run() != 0) {
+        std::fprintf(stderr, "XOR zero idiom failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    // XOR EAX,ECX and reverse opcode 33 must agree; 40 ^ 2 = 42.
+    const auto xorRegisters = std::to_array<std::uint8_t>({
+        0xB8, 40, 0, 0, 0,
+        0xB9, 2, 0, 0, 0,
+        0x33, 0xC1, 0xC3
+    });
+    if (GuestCpu(xorRegisters).run() != 42) {
+        std::fprintf(stderr, "XOR register form failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    // Memory XOR updates guest memory in place.
+    const auto xorMemory = std::to_array<std::uint8_t>({
+        0xB8, 40, 0, 0, 0,
+        0x89, 0x44, 0x24, 0xF8,
+        0xB9, 2, 0, 0, 0,
+        0x31, 0x4C, 0x24, 0xF8,
+        0x8B, 0x44, 0x24, 0xF8,
+        0xC3
+    });
+    GuestCpu xorMemoryCpu(xorMemory, 64);
+    if (xorMemoryCpu.run() != 42 || xorMemoryCpu.readMemory32(56) != 42) {
+        std::fprintf(stderr, "XOR memory form failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
     return EXIT_SUCCESS;
 }
