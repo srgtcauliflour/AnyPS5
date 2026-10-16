@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(anyps5_guest_cpu LANGUAGES CXX)
+project(anyps5_guest_cpu LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_library(anyps5_guest_cpu STATIC src/GuestCpu.cpp)
@@ -36,5 +36,44 @@ if(ANYPS5_GUEST_CPU_TESTS)
         add_executable(anyps5_guest_cpu_carry_arithmetic_differential_tests tests/GuestCpuCarryArithmeticDifferentialTests.cpp)
         target_link_libraries(anyps5_guest_cpu_carry_arithmetic_differential_tests PRIVATE anyps5_guest_cpu)
         add_test(NAME guest_cpu_carry_arithmetic_differential COMMAND anyps5_guest_cpu_carry_arithmetic_differential_tests)
+    endif()
+    # Linux-only ELF Stage 3: compiler-generated function bytes, no relocations.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
+       CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+        find_program(STAGE3_CLANG NAMES clang-17 REQUIRED)
+        find_program(STAGE3_NM NAMES nm REQUIRED)
+        find_program(STAGE3_OBJCOPY NAMES objcopy REQUIRED)
+        find_program(STAGE3_READELF NAMES readelf REQUIRED)
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        set(STAGE3_OBJECT "${CMAKE_CURRENT_BINARY_DIR}/stage3_fixture.o")
+        set(STAGE3_HEADER "${CMAKE_CURRENT_BINARY_DIR}/stage3_generated.hpp")
+        add_custom_command(
+            OUTPUT "${STAGE3_HEADER}"
+            COMMAND "${STAGE3_CLANG}" -O1 -fno-stack-protector -fno-pic
+                -fno-asynchronous-unwind-tables -fno-unwind-tables
+                -fno-builtin -fcf-protection=none -falign-functions=1
+                -falign-loops=1 -c
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/stage3_fixture.c"
+                -o "${STAGE3_OBJECT}"
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/generate_stage3_fixture.py"
+                "${STAGE3_OBJECT}" "${STAGE3_HEADER}"
+                "${STAGE3_NM}" "${STAGE3_OBJCOPY}" "${STAGE3_READELF}"
+            DEPENDS tests/stage3_fixture.c tests/generate_stage3_fixture.py
+            VERBATIM
+        )
+        add_custom_target(stage3_generate DEPENDS "${STAGE3_HEADER}")
+        add_library(stage3_native OBJECT tests/stage3_fixture.c)
+        add_executable(anyps5_guest_cpu_compiled_programs_tests
+            tests/GuestCpuCompiledProgramsTests.cpp
+            "${STAGE3_HEADER}"
+            $<TARGET_OBJECTS:stage3_native>)
+        add_dependencies(anyps5_guest_cpu_compiled_programs_tests stage3_generate)
+        target_include_directories(anyps5_guest_cpu_compiled_programs_tests
+            PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+        target_link_libraries(anyps5_guest_cpu_compiled_programs_tests
+            PRIVATE anyps5_guest_cpu)
+        add_test(NAME guest_cpu_compiled_programs
+            COMMAND anyps5_guest_cpu_compiled_programs_tests)
     endif()
 endif()
