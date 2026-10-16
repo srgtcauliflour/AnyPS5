@@ -51,6 +51,72 @@ void GuestCpu::writeMemory64(std::uint64_t address, std::uint64_t value) {
     for (unsigned i = 0; i < 8; ++i) memory_[static_cast<std::size_t>(address) + i] = static_cast<std::uint8_t>(value >> (i * 8));
 }
 
+
+std::uint32_t GuestCpu::readMemory32(std::uint64_t address) const {
+    if (address > memory_.size() || memory_.size() - static_cast<std::size_t>(address) < 4)
+        throw std::runtime_error("Guest memory read out of bounds");
+    std::uint32_t value = 0;
+    for (unsigned i = 0; i < 4; ++i)
+        value |= std::uint32_t{memory_[static_cast<std::size_t>(address) + i]} << (i * 8);
+    return value;
+}
+
+void GuestCpu::writeMemory32(std::uint64_t address, std::uint32_t value) {
+    if (address > memory_.size() || memory_.size() - static_cast<std::size_t>(address) < 4)
+        throw std::runtime_error("Guest memory write out of bounds");
+    for (unsigned i = 0; i < 4; ++i)
+        memory_[static_cast<std::size_t>(address) + i] = static_cast<std::uint8_t>(value >> (i * 8));
+}
+
+GuestCpu::Operand GuestCpu::decodeOperand(std::uint8_t modrm, bool rexB, bool rexX) {
+    const auto mod = static_cast<unsigned>(modrm >> 6);
+    const auto rm = static_cast<unsigned>(modrm & 7);
+    if (mod == 3) return {true, rm + (rexB ? 8u : 0u), 0};
+    std::uint64_t base = 0;
+    std::uint64_t index = 0;
+    unsigned scale = 1;
+    bool hasBase = true;
+    bool ripRelative = false;
+    if (rm == 4) {
+        const auto sib = read8();
+        scale = 1u << (sib >> 6);
+        const auto indexBits = static_cast<unsigned>((sib >> 3) & 7);
+        const auto baseBits = static_cast<unsigned>(sib & 7);
+        if (indexBits != 4 || rexX)
+            index = registers_[indexBits + (rexX ? 8u : 0u)];
+        if (mod == 0 && baseBits == 5) hasBase = false;
+        else base = registers_[baseBits + (rexB ? 8u : 0u)];
+    } else if (mod == 0 && rm == 5) {
+        hasBase = false;
+        ripRelative = true;
+    } else {
+        base = registers_[rm + (rexB ? 8u : 0u)];
+    }
+    std::int64_t displacement = 0;
+    if (mod == 1) displacement = static_cast<std::int8_t>(read8());
+    if (mod == 2 || (mod == 0 && !hasBase)) displacement = readSigned32();
+    if (ripRelative) base = ip_;
+    return {false, 0, base + index * scale + static_cast<std::uint64_t>(displacement)};
+}
+
+std::uint64_t GuestCpu::readOperand(const Operand& operand, bool wide) const {
+    if (operand.isRegister) {
+        const auto value = registers_[operand.index];
+        return wide ? value : static_cast<std::uint32_t>(value);
+    }
+    return wide ? readMemory64(operand.address) : readMemory32(operand.address);
+}
+
+void GuestCpu::writeOperand(const Operand& operand, std::uint64_t value, bool wide) {
+    if (operand.isRegister) {
+        registers_[operand.index] = wide ? value : static_cast<std::uint32_t>(value);
+    } else if (wide) {
+        writeMemory64(operand.address, value);
+    } else {
+        writeMemory32(operand.address, static_cast<std::uint32_t>(value));
+    }
+}
+
 void GuestCpu::push64(std::uint64_t value) {
     if (registers_[4] < 8 || registers_[4] > memory_.size()) throw std::runtime_error("Guest stack overflow");
     const auto next = registers_[4] - 8;
@@ -69,11 +135,23 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
     for (std::size_t count = 0; count < maxInstructions; ++count) {
         bool wide = false;
         bool extended = false;
+        bool rexR = false;
+        bool rexX = false;
         auto opcode = read8();
         if (opcode >= 0x40 && opcode <= 0x4F) {
             wide = (opcode & 8) != 0;
             extended = (opcode & 1) != 0;
+            rexR = (opcode & 4) != 0;
+            rexX = (opcode & 2) != 0;
             opcode = read8();
+        }
+        if (opcode == 0x89 || opcode == 0x8B) {
+            const auto modrm = read8();
+            const auto reg = static_cast<std::size_t>(((modrm >> 3) & 7) + (rexR ? 8 : 0));
+            const auto operand = decodeOperand(modrm, extended, rexX);
+            if (opcode == 0x89) writeOperand(operand, registers_[reg], wide);
+            else registers_[reg] = readOperand(operand, wide);
+            continue;
         }
         if (opcode == 0xC3) {
             if (wide || extended) throw std::runtime_error("Unsupported RET prefix");
