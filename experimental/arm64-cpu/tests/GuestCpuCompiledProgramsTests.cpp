@@ -90,10 +90,10 @@ int main() {
     for (const bool sorting : {false, true}) {
         const auto body = sorting ? std::span<const std::uint8_t>(stage3_generated::fixture_array_sort)
                                   : std::span<const std::uint8_t>(stage3_generated::fixture_array_sum);
-        for (unsigned length = 0; length <= 32; ++length) {
-            std::array<unsigned, 32> reference{};
+        for (unsigned length = 0; length <= 128; ++length) {
+            std::array<unsigned, 128> reference{};
             for (unsigned i = 0; i < length; ++i)
-                reference[i] = (i * 71u + length * 29u) % 101u;
+                reference[i] = ((i * 71u + length * 29u) ^ (i * i * 13u)) % 101u;
             const auto original = reference;
             const auto expected = sorting ? fixture_array_sort(reference.data(), length)
                                           : fixture_array_sum(reference.data(), length);
@@ -107,12 +107,16 @@ int main() {
             ++total;
             try {
                 GuestCpu cpu(code, 65536);
+                cpu.writeMemory32(guestArrayAddress - 4, 0xA5B6C7D8u);
+                cpu.writeMemory32(guestArrayAddress + 4u * length, 0x1234ABCDu);
                 for (unsigned i = 0; i < length; ++i)
                     cpu.writeMemory32(guestArrayAddress + 4u * i, original[i]);
                 const auto actual = cpu.run(100000);
                 bool memoryMatches = true;
                 for (unsigned i = 0; i < length; ++i)
                     memoryMatches &= cpu.readMemory32(guestArrayAddress + 4u * i) == reference[i];
+                memoryMatches &= cpu.readMemory32(guestArrayAddress - 4) == 0xA5B6C7D8u;
+                memoryMatches &= cpu.readMemory32(guestArrayAddress + 4u * length) == 0x1234ABCDu;
                 if (actual == expected && memoryMatches) ++passed;
                 else {
                     ++mismatch;
