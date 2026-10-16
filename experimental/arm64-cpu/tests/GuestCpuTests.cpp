@@ -625,5 +625,83 @@ int main() {
         return EXIT_FAILURE;
     }
 
+    // M13: zero-extend a byte value (0xFF -> 255) from CL.
+    const auto movzxRegister = std::to_array<std::uint8_t>({
+        0xB9, 0xFF, 0, 0, 0, // mov ecx,255
+        0x0F, 0xB6, 0xC1,   // movzx eax,cl
+        0xC3
+    });
+    if (GuestCpu(movzxRegister).run() != 255) {
+        std::fprintf(stderr, "M13 MOVZX register failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
+    // Sign-extend 0xFF to -1 in a 32-bit destination (zero-extended RAX).
+    const auto movsxRegister = std::to_array<std::uint8_t>({
+        0xB9, 0xFF, 0, 0, 0,
+        0x0F, 0xBE, 0xC1,   // movsx eax,cl
+        0xC3
+    });
+    if (GuestCpu(movsxRegister).run() != 0xFFFFFFFFULL) {
+        std::fprintf(stderr, "M13 MOVSX 32-bit sign extension failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
+    // REX.W MOVSX sign-extends to the full 64-bit destination.
+    const auto movsxWide = std::to_array<std::uint8_t>({
+        0xB9, 0x80, 0, 0, 0,
+        0x48, 0x0F, 0xBE, 0xC1, // movsx rax,cl
+        0xC3
+    });
+    if (GuestCpu(movsxWide).run() != 0xFFFFFFFFFFFFFF80ULL) {
+        std::fprintf(stderr, "M13 MOVSX 64-bit sign extension failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
+    // Without REX, encoded byte register 4 means AH.
+    const auto movzxHighByte = std::to_array<std::uint8_t>({
+        0xB8, 0x78, 0xAB, 0x34, 0x12,
+        0x0F, 0xB6, 0xC4, // movzx eax,ah -> 0xAB
+        0xC3
+    });
+    if (GuestCpu(movzxHighByte).run() != 0xAB) {
+        std::fprintf(stderr, "M13 MOVZX AH failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
+    // With a REX prefix, byte register 4 means SPL, not AH.
+    const auto movzxSpl = std::to_array<std::uint8_t>({
+        0x40, 0x0F, 0xB6, 0xC4, // movzx eax,spl
+        0xC3
+    });
+    if (GuestCpu(movzxSpl, 64).run() != 64) {
+        std::fprintf(stderr, "M13 MOVZX SPL failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
+    // Memory source must read exactly one byte, not a full dword.
+    const auto movzxMemory = std::to_array<std::uint8_t>({
+        0x0F, 0xB6, 0x44, 0x24, 0xF8, // movzx eax,byte [rsp-8]
+        0xC3
+    });
+    GuestCpu movzxMemoryCpu(movzxMemory, 64);
+    movzxMemoryCpu.writeMemory32(56, 0x123456FE);
+    if (movzxMemoryCpu.run() != 254) {
+        std::fprintf(stderr, "M13 MOVZX memory failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
+    // The same memory byte must sign-extend when MOVSX is used.
+    const auto movsxMemory = std::to_array<std::uint8_t>({
+        0x48, 0x0F, 0xBE, 0x44, 0x24, 0xF8,
+        0xC3
+    });
+    GuestCpu movsxMemoryCpu(movsxMemory, 64);
+    movsxMemoryCpu.writeMemory32(56, 0x123456FE);
+    if (movsxMemoryCpu.run() != 0xFFFFFFFFFFFFFFFEULL) {
+        std::fprintf(stderr, "M13 MOVSX memory failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
     return EXIT_SUCCESS;
 }
