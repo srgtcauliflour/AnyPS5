@@ -560,6 +560,69 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
         // Standard compiler-generated function epilogue: mov rsp, rbp; pop rbp.
         // Group 1 imm32 arithmetic (81 /0 ADD, /5 SUB, /7 CMP).
         // In 64-bit mode, the imm32 is sign-extended to 64 bits.
+        // ADC/SBB immediate group 1 extensions: 81/83 /2 and /3.
+        // 81 sign-extends imm32 for 64-bit operands; 83 sign-extends imm8.
+        if (opcode == 0x81 || opcode == 0x83) {
+            if (ip_ >= program_.size())
+                throw std::runtime_error("Truncated arithmetic ModR/M");
+            const auto operation = static_cast<unsigned>((program_[ip_] >> 3) & 7);
+            if (operation == 2 || operation == 3) {
+                const auto modrm = read8();
+                const bool imm32 = opcode == 0x81;
+                const auto operand = decodeOperand(modrm, extended, rexX, imm32 ? 4 : 1);
+                const auto immediate = imm32 ? static_cast<std::int64_t>(readSigned32()) :
+                    static_cast<std::int64_t>(static_cast<std::int8_t>(read8()));
+                const auto mask = wide ? UINT64_MAX : static_cast<std::uint64_t>(UINT32_MAX);
+                const auto sign = wide ? (UINT64_C(1) << 63) : (UINT64_C(1) << 31);
+                const auto lhs = readOperand(operand, wide) & mask;
+                const auto rhs = static_cast<std::uint64_t>(immediate) & mask;
+                const auto carryIn = static_cast<std::uint64_t>(carryFlag_);
+                const bool subtract = operation == 3;
+                const auto intermediate = subtract ? (lhs - rhs) & mask : (lhs + rhs) & mask;
+                const auto result = subtract ? (intermediate - carryIn) & mask :
+                    (intermediate + carryIn) & mask;
+                carryFlag_ = subtract ? (lhs < rhs || (lhs == rhs && carryIn != 0)) :
+                    (intermediate < lhs || (carryIn != 0 && intermediate == mask));
+                overflowFlag_ = subtract ?
+                    (((lhs ^ rhs) & (lhs ^ result) & sign) != 0) :
+                    (((~(lhs ^ rhs)) & (lhs ^ result) & sign) != 0);
+                zeroFlag_ = result == 0;
+                signFlag_ = (result & sign) != 0;
+                updateParity(result);
+                writeOperand(operand, result, wide);
+                continue;
+            }
+        }
+        // ROL/ROR: C1 imm8, D1 count=1, D3 count=CL. Rotates update
+        // CF and (only for count=1) OF; ZF/SF/PF remain unchanged.
+        if (opcode == 0xC1 || opcode == 0xD1 || opcode == 0xD3) {
+            if (ip_ >= program_.size())
+                throw std::runtime_error("Truncated rotate ModR/M");
+            const auto operation = static_cast<unsigned>((program_[ip_] >> 3) & 7);
+            if (operation == 0 || operation == 1) {
+                const auto modrm = read8();
+                const auto operand = decodeOperand(modrm, extended, rexX, opcode == 0xC1 ? 1 : 0);
+                const auto rawCount = opcode == 0xC1 ? static_cast<unsigned>(read8()) :
+                    opcode == 0xD1 ? 1u : static_cast<unsigned>(registers_[1] & 0xFF);
+                const auto bits = wide ? 64u : 32u;
+                const auto count = (rawCount & (wide ? 63u : 31u)) % bits;
+                if (count == 0) continue;
+                const auto mask = wide ? UINT64_MAX : static_cast<std::uint64_t>(UINT32_MAX);
+                const auto value = readOperand(operand, wide) & mask;
+                const auto result = operation == 0 ?
+                    ((value << count) | (value >> (bits - count))) & mask :
+                    ((value >> count) | (value << (bits - count))) & mask;
+                carryFlag_ = operation == 0 ? (result & 1u) != 0 :
+                    ((result >> (bits - 1)) & 1u) != 0;
+                if (count == 1) {
+                    const bool msb = ((result >> (bits - 1)) & 1u) != 0;
+                    overflowFlag_ = operation == 0 ? (msb != carryFlag_) :
+                        (msb != (((result >> (bits - 2)) & 1u) != 0));
+                }
+                writeOperand(operand, result, wide);
+                continue;
+            }
+        }
         if (opcode == 0x81) {
             const auto modrm = read8();
             const auto operation = static_cast<unsigned>((modrm >> 3) & 7);
@@ -692,69 +755,6 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             if (reverse) registers_[reg] = result;
             else writeOperand(operand, result, wide);
             continue;
-        }
-        // ADC/SBB immediate group 1 extensions: 81/83 /2 and /3.
-        // 81 sign-extends imm32 for 64-bit operands; 83 sign-extends imm8.
-        if (opcode == 0x81 || opcode == 0x83) {
-            if (ip_ >= program_.size())
-                throw std::runtime_error("Truncated arithmetic ModR/M");
-            const auto operation = static_cast<unsigned>((program_[ip_] >> 3) & 7);
-            if (operation == 2 || operation == 3) {
-                const auto modrm = read8();
-                const bool imm32 = opcode == 0x81;
-                const auto operand = decodeOperand(modrm, extended, rexX, imm32 ? 4 : 1);
-                const auto immediate = imm32 ? static_cast<std::int64_t>(readSigned32()) :
-                    static_cast<std::int64_t>(static_cast<std::int8_t>(read8()));
-                const auto mask = wide ? UINT64_MAX : static_cast<std::uint64_t>(UINT32_MAX);
-                const auto sign = wide ? (UINT64_C(1) << 63) : (UINT64_C(1) << 31);
-                const auto lhs = readOperand(operand, wide) & mask;
-                const auto rhs = static_cast<std::uint64_t>(immediate) & mask;
-                const auto carryIn = static_cast<std::uint64_t>(carryFlag_);
-                const bool subtract = operation == 3;
-                const auto intermediate = subtract ? (lhs - rhs) & mask : (lhs + rhs) & mask;
-                const auto result = subtract ? (intermediate - carryIn) & mask :
-                    (intermediate + carryIn) & mask;
-                carryFlag_ = subtract ? (lhs < rhs || (lhs == rhs && carryIn != 0)) :
-                    (intermediate < lhs || (carryIn != 0 && intermediate == mask));
-                overflowFlag_ = subtract ?
-                    (((lhs ^ rhs) & (lhs ^ result) & sign) != 0) :
-                    (((~(lhs ^ rhs)) & (lhs ^ result) & sign) != 0);
-                zeroFlag_ = result == 0;
-                signFlag_ = (result & sign) != 0;
-                updateParity(result);
-                writeOperand(operand, result, wide);
-                continue;
-            }
-        }
-        // ROL/ROR: C1 imm8, D1 count=1, D3 count=CL. Rotates update
-        // CF and (only for count=1) OF; ZF/SF/PF remain unchanged.
-        if (opcode == 0xC1 || opcode == 0xD1 || opcode == 0xD3) {
-            if (ip_ >= program_.size())
-                throw std::runtime_error("Truncated rotate ModR/M");
-            const auto operation = static_cast<unsigned>((program_[ip_] >> 3) & 7);
-            if (operation == 0 || operation == 1) {
-                const auto modrm = read8();
-                const auto operand = decodeOperand(modrm, extended, rexX, opcode == 0xC1 ? 1 : 0);
-                const auto rawCount = opcode == 0xC1 ? static_cast<unsigned>(read8()) :
-                    opcode == 0xD1 ? 1u : static_cast<unsigned>(registers_[1] & 0xFF);
-                const auto bits = wide ? 64u : 32u;
-                const auto count = (rawCount & (wide ? 63u : 31u)) % bits;
-                if (count == 0) continue;
-                const auto mask = wide ? UINT64_MAX : static_cast<std::uint64_t>(UINT32_MAX);
-                const auto value = readOperand(operand, wide) & mask;
-                const auto result = operation == 0 ?
-                    ((value << count) | (value >> (bits - count))) & mask :
-                    ((value >> count) | (value << (bits - count))) & mask;
-                carryFlag_ = operation == 0 ? (result & 1u) != 0 :
-                    ((result >> (bits - 1)) & 1u) != 0;
-                if (count == 1) {
-                    const bool msb = ((result >> (bits - 1)) & 1u) != 0;
-                    overflowFlag_ = operation == 0 ? (msb != carryFlag_) :
-                        (msb != (((result >> (bits - 2)) & 1u) != 0));
-                }
-                writeOperand(operand, result, wide);
-                continue;
-            }
         }
         // Group 2 shifts: C1 r/m,imm8; D1 r/m,1; D3 r/m,CL.
         // Shift counts are masked to 5 bits for 32-bit and 6 for 64-bit.
