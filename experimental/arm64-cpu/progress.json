@@ -1,5 +1,5 @@
 {
-  "milestone": "M3 — ModR/M memory addressing",
+  "milestone": "M4 — ModR/M arithmetic and flags",
   "updated": "2026-10-16",
   "categories": [
     {
@@ -48,7 +48,7 @@
         ],
         [
           "Arithmetic ModR/M instructions",
-          "planned"
+          "implemented"
         ],
         [
           "SIMD / AVX instructions",
