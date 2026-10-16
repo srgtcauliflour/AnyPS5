@@ -10,6 +10,10 @@ if(ANYPS5_GUEST_CPU_TESTS)
     add_executable(anyps5_guest_cpu_tests tests/GuestCpuTests.cpp)
     target_link_libraries(anyps5_guest_cpu_tests PRIVATE anyps5_guest_cpu)
     add_test(NAME guest_cpu COMMAND anyps5_guest_cpu_tests)
+    # Platform-independent program-level compatibility corpus.
+    add_executable(anyps5_guest_cpu_program_corpus_tests tests/GuestCpuProgramCorpusTests.cpp)
+    target_link_libraries(anyps5_guest_cpu_program_corpus_tests PRIVATE anyps5_guest_cpu)
+    add_test(NAME guest_cpu_program_corpus COMMAND anyps5_guest_cpu_program_corpus_tests)
     # Differential comparisons execute native x86-64 instructions and therefore
     # run only on x86-64 GCC/Clang hosts; iOS ARM64 remains compile-only.
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$" AND
