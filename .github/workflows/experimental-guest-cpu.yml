@@ -12,6 +12,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Install Stage 3 compiler (Linux only)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang-17 binutils python3
       - name: Configure
         run: cmake -S experimental/arm64-cpu -B guest-cpu-build -DCMAKE_BUILD_TYPE=Release
       - name: Build
