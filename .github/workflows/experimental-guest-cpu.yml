@@ -12,6 +12,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Verify progress dashboard is current
+        if: runner.os == 'Linux'
+        run: python3 experimental/arm64-cpu/render_progress.py --check
       - name: Configure
         run: cmake -S experimental/arm64-cpu -B guest-cpu-build -DCMAKE_BUILD_TYPE=Release
       - name: Build
