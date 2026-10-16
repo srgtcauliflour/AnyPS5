@@ -381,5 +381,43 @@ int main() {
         std::fprintf(stderr, "Signed multiplication failed at line %d\\n", __LINE__);
         return EXIT_FAILURE;
     }
+    // 64-bit signed IMUL: -7 * -6 = 42.
+    const std::array<std::uint8_t, 25> wideSignedMultiply{
+        0x48, 0xB8, 0xF9, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0x48, 0xB9, 0xFA, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0x48, 0x0F, 0xAF, 0xC1, 0xC3
+    };
+    if (GuestCpu(wideSignedMultiply).run() != 42) {
+        std::fprintf(stderr, "64-bit signed multiplication failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
+    // 2^62 * 4 overflows signed 64-bit. JO must skip the unsupported NOP.
+    const std::array<std::uint8_t, 28> wideMultiplyOverflow{
+        0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0x00, 0x40,
+        0xB9, 4, 0, 0, 0,
+        0x48, 0x0F, 0xAF, 0xC1,
+        0x70, 0x01,
+        0x90,
+        0xB8, 42, 0, 0, 0, 0xC3
+    };
+    if (GuestCpu(wideMultiplyOverflow).run() != 42) {
+        std::fprintf(stderr, "64-bit IMUL overflow flag failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
+    // -2^63 * -1 overflows even though the truncated product is -2^63.
+    const std::array<std::uint8_t, 33> signedBoundaryOverflow{
+        0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0x80,
+        0x48, 0xB9, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0x48, 0x0F, 0xAF, 0xC1,
+        0x70, 0x01,
+        0x90,
+        0xB8, 42, 0, 0, 0, 0xC3
+    };
+    if (GuestCpu(signedBoundaryOverflow).run() != 42) {
+        std::fprintf(stderr, "INT64_MIN multiplication overflow failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
     return EXIT_SUCCESS;
 }
