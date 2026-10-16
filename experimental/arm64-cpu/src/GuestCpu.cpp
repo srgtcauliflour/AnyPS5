@@ -323,8 +323,7 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             std::uint8_t lhs = 0;
             if (operand.isRegister) lhs = byteReg(operand.index);
             else {
-                if (operand.address >= memory_.size())
-                    throw std::runtime_error("Guest byte ALU read out of bounds");
+                checkMemory(operand.address, 1, false);
                 lhs = memory_[static_cast<std::size_t>(operand.address)];
             }
             std::uint8_t result = 0;
@@ -351,7 +350,7 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             }
             if (operation != 7) {
                 if (operand.isRegister) writeByteReg(operand.index, result);
-                else memory_[static_cast<std::size_t>(operand.address)] = result;
+                else { checkMemory(operand.address, 1, true); memory_[static_cast<std::size_t>(operand.address)] = result; }
             }
             continue;
         }
@@ -384,8 +383,7 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             std::uint8_t lhs = 0;
             if (operand.isRegister) lhs = byteReg(operand.index);
             else {
-                if (operand.address >= memory_.size())
-                    throw std::runtime_error("Guest byte TEST read out of bounds");
+                checkMemory(operand.address, 1, false);
                 lhs = memory_[static_cast<std::size_t>(operand.address)];
             }
             const auto result = static_cast<std::uint8_t>(lhs & byteReg(reg));
@@ -420,15 +418,13 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             };
             const auto readByte = [&]() -> std::uint8_t {
                 if (operand.isRegister) return readByteReg(operand.index);
-                if (operand.address >= memory_.size())
-                    throw std::runtime_error("Guest byte read out of bounds");
+                checkMemory(operand.address, 1, false);
                 return memory_[static_cast<std::size_t>(operand.address)];
             };
             const auto writeByte = [&](std::uint8_t value) {
                 if (operand.isRegister) writeByteReg(operand.index, value);
                 else {
-                    if (operand.address >= memory_.size())
-                        throw std::runtime_error("Guest byte write out of bounds");
+                    checkMemory(operand.address, 1, true);
                     memory_[static_cast<std::size_t>(operand.address)] = value;
                 }
             };
@@ -474,9 +470,7 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             const auto readWord = [&]() -> std::uint16_t {
                 if (operand.isRegister)
                     return static_cast<std::uint16_t>(registers_[operand.index]);
-                if (operand.address > memory_.size() ||
-                    memory_.size() - static_cast<std::size_t>(operand.address) < 2)
-                    throw std::runtime_error("Guest word read out of bounds");
+                checkMemory(operand.address, 2, false);
                 const auto address = static_cast<std::size_t>(operand.address);
                 return static_cast<std::uint16_t>(
                     memory_[address] | (static_cast<unsigned>(memory_[address + 1]) << 8));
@@ -486,9 +480,7 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
                     registers_[operand.index] =
                         (registers_[operand.index] & ~UINT64_C(0xFFFF)) | value;
                 } else {
-                    if (operand.address > memory_.size() ||
-                        memory_.size() - static_cast<std::size_t>(operand.address) < 2)
-                        throw std::runtime_error("Guest word write out of bounds");
+                    checkMemory(operand.address, 2, true);
                     const auto address = static_cast<std::size_t>(operand.address);
                     memory_[address] = static_cast<std::uint8_t>(value);
                     memory_[address + 1] = static_cast<std::uint8_t>(value >> 8);
@@ -512,9 +504,7 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
                 registers_[operand.index] =
                     (registers_[operand.index] & ~UINT64_C(0xFFFF)) | value;
             } else {
-                if (operand.address > memory_.size() ||
-                    memory_.size() - static_cast<std::size_t>(operand.address) < 2)
-                    throw std::runtime_error("Guest word write out of bounds");
+                checkMemory(operand.address, 2, true);
                 const auto address = static_cast<std::size_t>(operand.address);
                 memory_[address] = static_cast<std::uint8_t>(value);
                 memory_[address + 1] = static_cast<std::uint8_t>(value >> 8);
@@ -975,8 +965,7 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
                     else
                         byteValue = static_cast<std::uint8_t>(registers_[operand.index]);
                 } else {
-                    if (operand.address >= memory_.size())
-                        throw std::runtime_error("Guest byte read out of bounds");
+                    checkMemory(operand.address, 1, false);
                     byteValue = memory_[static_cast<std::size_t>(operand.address)];
                 }
                 if (second == 0xB6) {
@@ -1003,9 +992,7 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
                 if (operand.isRegister) {
                     wordValue = static_cast<std::uint16_t>(registers_[operand.index]);
                 } else {
-                    if (operand.address > memory_.size() ||
-                        memory_.size() - static_cast<std::size_t>(operand.address) < 2)
-                        throw std::runtime_error("Guest word read out of bounds");
+                    checkMemory(operand.address, 2, false);
                     const auto offset = static_cast<std::size_t>(operand.address);
                     wordValue = static_cast<std::uint16_t>(
                         static_cast<std::uint16_t>(memory_[offset]) |
@@ -1041,8 +1028,7 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
                         registers_[reg] = (registers_[reg] & ~std::uint64_t{0xFF}) | value;
                     }
                 } else {
-                    if (operand.address >= memory_.size())
-                        throw std::runtime_error("Guest byte write out of bounds");
+                    checkMemory(operand.address, 1, true);
                     memory_[static_cast<std::size_t>(operand.address)] = value;
                 }
                 continue;
