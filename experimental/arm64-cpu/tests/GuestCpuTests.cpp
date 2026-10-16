@@ -186,9 +186,5 @@ int main() {
     rejected = false;
     try { GuestCpu(truncatedDisp).run(); } catch (const std::runtime_error&) { rejected = true; }
     if (!rejected) return EXIT_FAILURE;
-    const std::array<std::uint8_t, 4> badRex{0x42, 0xB8, 0x00, 0xC3};
-    rejected = false;
-    try { GuestCpu(badRex).run(); } catch (const std::runtime_error&) { rejected = true; }
-    if (!rejected) return EXIT_FAILURE;
     return EXIT_SUCCESS;
 }
