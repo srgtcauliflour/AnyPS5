@@ -39,6 +39,63 @@ static std::uint64_t nativeShift64(std::uint64_t value, std::uint8_t count,
     return value;
 }
 
+struct NativeMultiplyFlags {
+    std::uint64_t result;
+    bool overflow;
+    bool carry;
+};
+
+static NativeMultiplyFlags nativeMultiplyFlags32(std::uint32_t input, std::int32_t factor) {
+    std::uint32_t value = input;
+    unsigned char overflow = 0, carry = 0;
+    asm volatile(
+        "imull %3, %0; seto %1; setc %2"
+        : "+r"(value), "=qm"(overflow), "=qm"(carry)
+        : "r"(factor) : "cc");
+    return {value, overflow != 0, carry != 0};
+}
+
+static NativeMultiplyFlags nativeMultiplyFlags64(std::uint64_t input, std::int64_t factor) {
+    std::uint64_t value = input;
+    unsigned char overflow = 0, carry = 0;
+    asm volatile(
+        "imulq %3, %0; seto %1; setc %2"
+        : "+r"(value), "=qm"(overflow), "=qm"(carry)
+        : "r"(factor) : "cc");
+    return {value, overflow != 0, carry != 0};
+}
+
+// Return the flags via SETO/SETC and MOVZX, avoiding any direct access
+// to the interpreter's private flag storage.
+static std::uint64_t guestMultiplyFlags(std::uint64_t input,
+                                         std::int8_t factor, bool wide) {
+    std::vector<std::uint8_t> code;
+    if (wide) code.push_back(0x48);
+    code.push_back(0xB9); // mov ecx/rcx, immediate
+    const unsigned bytes = wide ? 8u : 4u;
+    for (unsigned i = 0; i < bytes; ++i)
+        code.push_back(static_cast<std::uint8_t>(input >> (i * 8)));
+    if (wide) code.push_back(0x48);
+    code.insert(code.end(), {0x6B, 0xC1, static_cast<std::uint8_t>(factor)});
+    code.insert(code.end(), {
+        0x0F, 0x90, 0xC2, // seto dl
+        0x0F, 0x92, 0xC1, // setc cl
+        0x0F, 0xB6, 0xD2, // movzx edx,dl
+        0x0F, 0xB6, 0xC9, // movzx ecx,cl
+        0xD1, 0xE1,       // shl ecx,1
+        0x09, 0xC8,       // or eax,ecx
+        0x09, 0xD0,       // or eax,edx
+        0xC3
+    });
+    // The ORs above retain the product's low bits, so instead return
+    // a clean 2-bit flag mask using a separate MOV EAX,0.
+    code.erase(code.end() - 5, code.end() - 1);
+    // At this point the trailing bytes are: SHL ECX,1; RET.
+    // Insert XOR EAX,EAX followed by the two OR operations before RET.
+    code.insert(code.end() - 1, {0x31, 0xC0, 0x09, 0xC8, 0x09, 0xD0});
+    return GuestCpu(code).run();
+}
+
 int main() {
     std::uint32_t seed = 0xA17C9E53u;
     constexpr std::array<std::uint32_t, 9> boundaries{
@@ -90,6 +147,33 @@ int main() {
                     static_cast<unsigned long long>(wideActual));
                 return EXIT_FAILURE;
             }
+        }
+        // Differential OF/CF checks on both operand widths. x86 IMUL
+        // specifies CF == OF; SETcc exposes them to the guest program.
+        const auto signedFactor = static_cast<std::int8_t>(sample);
+        const auto native32 = nativeMultiplyFlags32(value, signedFactor);
+        const auto guestFlags32 = guestMultiplyFlags(value, signedFactor, false);
+        const auto expectedFlags32 = static_cast<std::uint64_t>(
+            native32.overflow | (static_cast<unsigned>(native32.carry) << 1));
+        if (guestFlags32 != expectedFlags32) {
+            std::fprintf(stderr,
+                "IMUL 32-bit flags mismatch sample=%u expected=%llu actual=%llu\\n",
+                sample, static_cast<unsigned long long>(expectedFlags32),
+                static_cast<unsigned long long>(guestFlags32));
+            return EXIT_FAILURE;
+        }
+        const std::uint64_t wideInput =
+            (static_cast<std::uint64_t>(value) << 32) | (~value);
+        const auto native64 = nativeMultiplyFlags64(wideInput, signedFactor);
+        const auto guestFlags64 = guestMultiplyFlags(wideInput, signedFactor, true);
+        const auto expectedFlags64 = static_cast<std::uint64_t>(
+            native64.overflow | (static_cast<unsigned>(native64.carry) << 1));
+        if (guestFlags64 != expectedFlags64) {
+            std::fprintf(stderr,
+                "IMUL 64-bit flags mismatch sample=%u expected=%llu actual=%llu\\n",
+                sample, static_cast<unsigned long long>(expectedFlags64),
+                static_cast<unsigned long long>(guestFlags64));
+            return EXIT_FAILURE;
         }
         const auto factor = static_cast<std::int8_t>(sample);
         std::array<std::uint8_t, 9> imul{
