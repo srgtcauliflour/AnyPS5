@@ -272,12 +272,12 @@ int main() {
     };
     if (GuestCpu(nearSignedLess).run() != 42) return EXIT_FAILURE;
 
-    // Overflow: 0x7FFFFFFF + 1 becomes negative but signed JG must be false.
+    // Overflow: 0x7FFFFFFF + 1 becomes negative, but signed JL is false (SF == OF).
     const std::array<std::uint8_t, 23> overflowBranch{
         0xB8, 0xFF, 0xFF, 0xFF, 0x7F,
         0xB9, 1, 0, 0, 0,
         0x03, 0xC1,
-        0x7F, 0x01,
+        0x7C, 0x01,
         0xEB, 0x01,
         0x90,
         0xB8, 42, 0, 0, 0, 0xC3
