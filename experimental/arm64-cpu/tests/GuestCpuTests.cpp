@@ -1140,5 +1140,79 @@ int main() {
         return EXIT_FAILURE;
     }
 
+    // M23: MOVSXD sign extends 32-bit source into a 64-bit destination.
+    const auto movsxdNegative = std::to_array<std::uint8_t>({
+        0xB9, 0xD6, 0xFF, 0xFF, 0xFF, // ecx=-42
+        0x48, 0x63, 0xC1,             // movsxd rax,ecx
+        0xC3
+    });
+    if (GuestCpu(movsxdNegative).run() != UINT64_C(0xFFFFFFFFFFFFFFD6)) {
+        std::fprintf(stderr, "M23 MOVSXD negative failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto movsxdPositive = std::to_array<std::uint8_t>({
+        0xB9, 42, 0, 0, 0,
+        0x48, 0x63, 0xC1,
+        0xC3
+    });
+    if (GuestCpu(movsxdPositive).run() != 42) {
+        std::fprintf(stderr, "M23 MOVSXD positive failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto movsxdMin = std::to_array<std::uint8_t>({
+        0xB9, 0, 0, 0, 0x80,
+        0x48, 0x63, 0xC1,
+        0xC3
+    });
+    if (GuestCpu(movsxdMin).run() != UINT64_C(0xFFFFFFFF80000000)) {
+        std::fprintf(stderr, "M23 MOVSXD INT32_MIN failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto movsxdMemory = std::to_array<std::uint8_t>({
+        0x48, 0x63, 0x44, 0x24, 0xF8, // movsxd rax,dword [rsp-8]
+        0xC3
+    });
+    GuestCpu movsxdMemoryCpu(movsxdMemory, 64);
+    movsxdMemoryCpu.writeMemory32(56, 0xFFFFFFD6u);
+    if (movsxdMemoryCpu.run() != UINT64_C(0xFFFFFFFFFFFFFFD6)) {
+        std::fprintf(stderr, "M23 MOVSXD memory failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto movsxdRexRegisters = std::to_array<std::uint8_t>({
+        0x41, 0xB8, 0xD6, 0xFF, 0xFF, 0xFF, // mov r8d,-42
+        0x49, 0x63, 0xC0,                   // movsxd rax,r8d
+        0xC3
+    });
+    if (GuestCpu(movsxdRexRegisters).run() != UINT64_C(0xFFFFFFFFFFFFFFD6)) {
+        std::fprintf(stderr, "M23 MOVSXD REX.B failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto movsxdTruncated = std::to_array<std::uint8_t>({0x48, 0x63});
+    rejected = false;
+    try { GuestCpu(movsxdTruncated).run(); }
+    catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) {
+        std::fprintf(stderr, "M23 truncated MOVSXD accepted at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto movsxdInvalidMemory = std::to_array<std::uint8_t>({
+        0x48, 0x63, 0x44, 0x24, 0x00, 0xC3 // [rsp] beyond guest memory
+    });
+    rejected = false;
+    try { GuestCpu(movsxdInvalidMemory, 64).run(); }
+    catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) {
+        std::fprintf(stderr, "M23 out-of-range MOVSXD accepted at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto movsxdNoRexW = std::to_array<std::uint8_t>({0x63, 0xC1, 0xC3});
+    rejected = false;
+    try { GuestCpu(movsxdNoRexW).run(); }
+    catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) {
+        std::fprintf(stderr, "M23 unsupported width accepted at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
     return EXIT_SUCCESS;
 }
