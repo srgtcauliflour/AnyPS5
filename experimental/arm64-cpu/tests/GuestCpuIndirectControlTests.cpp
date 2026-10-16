@@ -68,7 +68,7 @@ int main() {
     // Invalid targets must not silently wrap or escape the guest code.
     if (!rejects({0xB8, 255, 0, 0, 0, 0xFF, 0xE0}) ||
         !rejects({0xB8, 255, 0, 0, 0, 0xFF, 0xD0}) ||
-        !rejects({0xFF, 0x20}) || // JMP [rax], RAX=0, reads stack memory
+        !rejects({0xFF, 0x20}) || // JMP [rax], RAX=0, zero target loops
         !rejects({0xFF, 0xE0}, 64, 5) || // self-loop via RAX=0
         !rejects({0xFF, 0xF0})) { // unsupported FF /6
         std::fprintf(stderr, "invalid indirect control flow accepted\n");
