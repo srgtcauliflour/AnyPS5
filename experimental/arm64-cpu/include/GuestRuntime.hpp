@@ -9,8 +9,8 @@ namespace anyps5::experimental {
 // Deliberately scoped, non-ELF test image. All offsets are little-endian.
 class GuestRuntime {
 public:
-    // Header: "AG64", version u32=1, codeSize u32, dataSize u32,
-    // entryOffset u32. Then code bytes and initialized data bytes.
+    // AG64 v1: 20-byte header, code and initialized data.
+    // AG64 v2: 24-byte header, code, data, and relocation records.
     static GuestRuntime load(std::span<const std::uint8_t> image,
                              std::size_t stackSize = 65536);
     std::uint64_t run(std::size_t instructionLimit = 100000);
