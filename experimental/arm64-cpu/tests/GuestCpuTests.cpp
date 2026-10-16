@@ -1421,5 +1421,112 @@ int main() {
         return EXIT_FAILURE;
     }
 
+    // M27: compiler-oriented byte moves, sign extension and NOP alignment.
+    const auto byteMoveRegister = std::to_array<std::uint8_t>({
+        0xB8, 0x34, 0x12, 0, 0, // eax=0x1234
+        0xB9, 42, 0, 0, 0,    // ecx=42
+        0x88, 0xC8,          // mov al,cl; preserve AH
+        0xC3
+    });
+    if (GuestCpu(byteMoveRegister).run() != 0x122A) {
+        std::fprintf(stderr, "M27 byte register MOV failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto byteHighRegister = std::to_array<std::uint8_t>({
+        0xB8, 0, 0, 0, 0,
+        0xB9, 42, 0, 0, 0,
+        0x88, 0xCC, // mov ah,cl
+        0xC3
+    });
+    if (GuestCpu(byteHighRegister).run() != 0x2A00) {
+        std::fprintf(stderr, "M27 AH MOV failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto byteMoveMemory = std::to_array<std::uint8_t>({
+        0xB8, 42, 0, 0, 0,
+        0x88, 0x44, 0x24, 0xFF, // mov [rsp-1],al
+        0xB8, 0, 0, 0, 0,
+        0x8A, 0x44, 0x24, 0xFF, // mov al,[rsp-1]
+        0xC3
+    });
+    if (GuestCpu(byteMoveMemory, 64).run() != 42) {
+        std::fprintf(stderr, "M27 byte memory roundtrip failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto byteImmediate = std::to_array<std::uint8_t>({
+        0xC6, 0xC0, 42, 0xC3 // mov al,42
+    });
+    if (GuestCpu(byteImmediate).run() != 42) {
+        std::fprintf(stderr, "M27 C6 register failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto byteImmediateRip = std::to_array<std::uint8_t>({
+        0xC6, 0x05, 0xF9, 0xFF, 0xFF, 0xFF, 42, 0xC3
+    });
+    GuestCpu byteImmediateRipCpu(byteImmediateRip, 64);
+    if (byteImmediateRipCpu.run() != 0 ||
+        (byteImmediateRipCpu.readMemory32(0) & 0xFFu) != 42) {
+        std::fprintf(stderr, "M27 C6 RIP-relative failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto byteRexRegister = std::to_array<std::uint8_t>({
+        0x41, 0xB8, 42, 0, 0, 0, // mov r8d,42
+        0x44, 0x88, 0xC0,       // mov al,r8b
+        0xC3
+    });
+    if (GuestCpu(byteRexRegister).run() != 42) {
+        std::fprintf(stderr, "M27 REX byte register failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto cdqeNegative = std::to_array<std::uint8_t>({
+        0xB8, 0xD6, 0xFF, 0xFF, 0xFF, 0x48, 0x98, 0xC3
+    });
+    if (GuestCpu(cdqeNegative).run() != UINT64_C(0xFFFFFFFFFFFFFFD6)) {
+        std::fprintf(stderr, "M27 CDQE failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto cwdeNegative = std::to_array<std::uint8_t>({
+        0xB8, 0xD6, 0xFF, 0, 0, 0x98, 0xC3
+    });
+    if (GuestCpu(cwdeNegative).run() != 0xFFFFFFD6u) {
+        std::fprintf(stderr, "M27 CWDE failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto alignmentNops = std::to_array<std::uint8_t>({
+        0x90, 0x0F, 0x1F, 0x00, // nop; nop dword [rax]
+        0x0F, 0x1F, 0x44, 0x00, 0x00, // nop dword [rax+rax]
+        0xB8, 42, 0, 0, 0, 0xC3
+    });
+    if (GuestCpu(alignmentNops).run() != 42) {
+        std::fprintf(stderr, "M27 alignment NOP failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto invalidC6 = std::to_array<std::uint8_t>({0xC6, 0xC8, 42, 0xC3});
+    rejected = false;
+    try { GuestCpu(invalidC6).run(); }
+    catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) {
+        std::fprintf(stderr, "M27 unsupported C6 accepted at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto truncatedC6 = std::to_array<std::uint8_t>({0xC6, 0xC0});
+    rejected = false;
+    try { GuestCpu(truncatedC6).run(); }
+    catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) {
+        std::fprintf(stderr, "M27 truncated C6 accepted at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto invalidByteMemory = std::to_array<std::uint8_t>({
+        0x8A, 0x44, 0x24, 0x00, 0xC3 // mov al,[rsp] out of bounds
+    });
+    rejected = false;
+    try { GuestCpu(invalidByteMemory, 64).run(); }
+    catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) {
+        std::fprintf(stderr, "M27 out-of-bounds byte read accepted at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
     return EXIT_SUCCESS;
 }
