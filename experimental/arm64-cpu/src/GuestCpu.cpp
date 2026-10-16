@@ -234,6 +234,41 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             continue;
         }
         // Standard compiler-generated function epilogue: mov rsp, rbp; pop rbp.
+        // Group 1 imm32 arithmetic (81 /0 ADD, /5 SUB, /7 CMP).
+        // In 64-bit mode, the imm32 is sign-extended to 64 bits.
+        if (opcode == 0x81) {
+            const auto modrm = read8();
+            const auto operation = static_cast<unsigned>((modrm >> 3) & 7);
+            const auto operand = decodeOperand(modrm, extended, rexX);
+            const auto immediate = readSigned32();
+            if (operation != 0 && operation != 5 && operation != 7)
+                throw std::runtime_error("Unsupported group 1 imm32 operation");
+            const auto mask = wide ? UINT64_MAX : static_cast<std::uint64_t>(UINT32_MAX);
+            const auto lhs = readOperand(operand, wide) & mask;
+            const auto rhs = static_cast<std::uint64_t>(static_cast<std::int64_t>(immediate)) & mask;
+            const bool subtract = operation != 0;
+            const auto result = (subtract ? lhs - rhs : lhs + rhs) & mask;
+            updateArithmeticFlags(lhs, rhs, result, wide, subtract);
+            if (operation != 7) writeOperand(operand, result, wide);
+            continue;
+        }
+        // INC/DEC r/m32 or r/m64 (FF /0 and /1), preserving carry.
+        if (opcode == 0xFF) {
+            const auto modrm = read8();
+            const auto operation = static_cast<unsigned>((modrm >> 3) & 7);
+            const auto operand = decodeOperand(modrm, extended, rexX);
+            if (operation != 0 && operation != 1)
+                throw std::runtime_error("Unsupported FF group operation");
+            const auto mask = wide ? UINT64_MAX : static_cast<std::uint64_t>(UINT32_MAX);
+            const auto lhs = readOperand(operand, wide) & mask;
+            const auto rhs = std::uint64_t{1};
+            const auto result = (operation == 0 ? lhs + rhs : lhs - rhs) & mask;
+            const bool savedCarry = carryFlag_;
+            updateArithmeticFlags(lhs, rhs, result, wide, operation == 1);
+            carryFlag_ = savedCarry;
+            writeOperand(operand, result, wide);
+            continue;
+        }
         // Group 1 immediate arithmetic: 83 /0 ADD, /5 SUB, /7 CMP.
         // The imm8 is sign-extended to the operand width.
         if (opcode == 0x83) {
