@@ -141,5 +141,66 @@ int main() {
         return EXIT_FAILURE;
     } catch (const std::runtime_error&) {}
 
+    // XCHG opcode-register forms, including REX.B and operand-size override.
+    const std::array<std::uint8_t, 13> xchg32{
+        0xB8, 42, 0, 0, 0, 0xB9, 7, 0, 0, 0,
+        0x91, 0xC3, 0x90
+    };
+    GuestCpu xchg32Cpu(xchg32);
+    if (!check("XCHG eax,ecx", xchg32Cpu.run(), 7) ||
+        !check("XCHG ecx,eax", xchg32Cpu.registerValue(1), 42))
+        return EXIT_FAILURE;
+
+    const std::array<std::uint8_t, 14> xchgR8{
+        0xB8, 42, 0, 0, 0,
+        0x41, 0xB8, 7, 0, 0, 0,
+        0x41, 0x90, 0xC3
+    };
+    GuestCpu xchgR8Cpu(xchgR8);
+    if (!check("REX.B 90 is XCHG", xchgR8Cpu.run(), 7) ||
+        !check("REX.B 90 updates r8d", xchgR8Cpu.registerValue(8), 42))
+        return EXIT_FAILURE;
+
+    const std::array<std::uint8_t, 15> xchgWord{
+        0xB8, 42, 0, 0, 0,
+        0xB9, 7, 0, 0, 0,
+        0x66, 0x91, 0xC3, 0x90, 0x90
+    };
+    GuestCpu xchgWordCpu(xchgWord);
+    if (!check("16-bit XCHG", xchgWordCpu.run(), 7) ||
+        !check("16-bit XCHG second register", xchgWordCpu.registerValue(1), 42))
+        return EXIT_FAILURE;
+
+    const std::array<std::uint8_t, 15> xchgModrm{
+        0xB8, 42, 0, 0, 0,
+        0xB9, 7, 0, 0, 0,
+        0x87, 0xC1, 0xC3, 0x90, 0x90
+    };
+    GuestCpu xchgModrmCpu(xchgModrm);
+    if (!check("ModRM XCHG", xchgModrmCpu.run(), 7) ||
+        !check("ModRM XCHG other register", xchgModrmCpu.registerValue(1), 42))
+        return EXIT_FAILURE;
+
+    const std::array<std::uint8_t, 21> xchgMemory{
+        0xB8, 42, 0, 0, 0,
+        0x89, 0x44, 0x24, 0xF8,
+        0xB8, 7, 0, 0, 0,
+        0x87, 0x44, 0x24, 0xF8,
+        0x8B, 0x4C, 0x24, 0xF8, 0xC3
+    };
+    GuestCpu xchgMemoryCpu(xchgMemory, 64);
+    if (!check("XCHG memory returns previous value", xchgMemoryCpu.run(), 42) ||
+        !check("XCHG memory writes replacement", xchgMemoryCpu.registerValue(1), 7))
+        return EXIT_FAILURE;
+
+    const std::array<std::uint8_t, 12> rexWideNop{
+        0x48, 0xB8, 42, 0, 0, 0, 0, 0, 0, 0,
+        0x48, 0x90
+    };
+    std::vector<std::uint8_t> rexWideNopCode(rexWideNop.begin(), rexWideNop.end());
+    rexWideNopCode.push_back(0xC3);
+    if (!check("REX.W 90 is NOP", GuestCpu(rexWideNopCode).run(), 42))
+        return EXIT_FAILURE;
+
     return EXIT_SUCCESS;
 }
