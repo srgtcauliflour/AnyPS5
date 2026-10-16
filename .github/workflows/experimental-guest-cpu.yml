@@ -14,7 +14,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify progress dashboard is current
         if: runner.os == 'Linux'
-        run: python3 experimental/arm64-cpu/render_progress.py --check
+        shell: bash
+        run: |
+          python3 experimental/arm64-cpu/render_progress.py --check || {
+            echo "::error::Progress dashboard is not synchronized; showing exact diff"
+            python3 experimental/arm64-cpu/render_progress.py
+            git diff -- experimental/arm64-cpu/progress.svg
+            exit 1
+          }
       - name: Configure
         run: cmake -S experimental/arm64-cpu -B guest-cpu-build -DCMAKE_BUILD_TYPE=Release
       - name: Build
