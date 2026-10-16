@@ -357,7 +357,7 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             }
             continue;
         }
-        if (operand16)
+        if (operand16 && !(opcode >= 0xB8 && opcode <= 0xBF))
             throw std::runtime_error("Unsupported 16-bit operand-size instruction");
         if (opcode == 0x89 || opcode == 0x8B) {
             const auto modrm = read8();
