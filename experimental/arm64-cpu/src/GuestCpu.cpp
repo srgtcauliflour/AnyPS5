@@ -151,6 +151,8 @@ void GuestCpu::updateArithmeticFlags(std::uint64_t lhs, std::uint64_t rhs,
 
 bool GuestCpu::evaluateCondition(std::uint8_t condition) const {
     switch (condition & 0x0F) {
+    case 0x0: return overflowFlag_;
+    case 0x1: return !overflowFlag_;
     case 0x2: return carryFlag_;
     case 0x3: return !carryFlag_;
     case 0x4: return zeroFlag_;
@@ -257,15 +259,27 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
                 const auto modrm = read8();
                 const auto reg = static_cast<std::size_t>(((modrm >> 3) & 7) + (rexR ? 8 : 0));
                 const auto operand = decodeOperand(modrm, extended, rexX);
-                if (wide) throw std::runtime_error("64-bit IMUL not yet supported");
-                const auto rhs = readOperand(operand, false);
-                const auto lhs = static_cast<std::uint32_t>(registers_[reg]);
-                const auto result = lhs * rhs;
-                registers_[reg] = static_cast<std::uint32_t>(result);
-                // CF/OF indicate whether the signed product was truncated.
-                const auto product = static_cast<std::int64_t>(static_cast<std::int32_t>(lhs)) *
-                                     static_cast<std::int64_t>(static_cast<std::int32_t>(rhs));
-                carryFlag_ = overflowFlag_ = product < INT32_MIN || product > INT32_MAX;
+                const auto rhs = readOperand(operand, wide);
+                const auto lhs = wide ? registers_[reg] : static_cast<std::uint32_t>(registers_[reg]);
+                const auto result = lhs * rhs; // Unsigned modular product avoids signed-overflow UB.
+                registers_[reg] = wide ? result : static_cast<std::uint32_t>(result);
+                // x86 IMUL sets CF and OF iff the full signed product cannot
+                // be represented at the selected operand width.
+                if (wide) {
+                    const bool leftNegative = (lhs >> 63) != 0;
+                    const bool rightNegative = (rhs >> 63) != 0;
+                    const auto leftMagnitude = leftNegative ? std::uint64_t{0} - lhs : lhs;
+                    const auto rightMagnitude = rightNegative ? std::uint64_t{0} - rhs : rhs;
+                    const auto limit = (leftNegative != rightNegative)
+                        ? (std::uint64_t{1} << 63)
+                        : static_cast<std::uint64_t>(INT64_MAX);
+                    carryFlag_ = overflowFlag_ = rightMagnitude != 0 &&
+                        leftMagnitude > limit / rightMagnitude;
+                } else {
+                    const auto product = static_cast<std::int64_t>(static_cast<std::int32_t>(lhs)) *
+                                         static_cast<std::int64_t>(static_cast<std::int32_t>(rhs));
+                    carryFlag_ = overflowFlag_ = product < INT32_MIN || product > INT32_MAX;
+                }
                 continue;
             }
             if (second >= 0x80 && second <= 0x8F) {
