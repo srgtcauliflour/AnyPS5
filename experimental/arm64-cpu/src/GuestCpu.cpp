@@ -95,7 +95,9 @@ GuestCpu::Operand GuestCpu::decodeOperand(std::uint8_t modrm, bool rexB, bool re
     std::int64_t displacement = 0;
     if (mod == 1) displacement = static_cast<std::int8_t>(read8());
     if (mod == 2 || (mod == 0 && !hasBase)) displacement = readSigned32();
-    // RIP-relative addresses use the end of the *entire* instruction,\n    // including any immediate following ModR/M displacement bytes.\n    if (ripRelative) base = static_cast<std::uint64_t>(ip_) + trailingImmediateBytes;
+    // RIP-relative addresses use the end of the *entire* instruction,
+    // including any immediate following ModR/M displacement bytes.
+    if (ripRelative) base = static_cast<std::uint64_t>(ip_) + trailingImmediateBytes;
     return {false, 0, base + index * scale + static_cast<std::uint64_t>(displacement)};
 }
 
