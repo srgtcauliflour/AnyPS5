@@ -2,8 +2,13 @@
 #include <limits>
 
 namespace anyps5::experimental {
-GuestCpu::GuestCpu(std::span<const std::uint8_t> program)
-    : program_(program.begin(), program.end()) {}
+GuestCpu::GuestCpu(std::span<const std::uint8_t> program, std::size_t stackBytes)
+    : program_(program.begin(), program.end()), memory_(stackBytes, 0) {
+    if (stackBytes < 8 || stackBytes > std::numeric_limits<std::uint32_t>::max()) {
+        throw std::invalid_argument("Invalid guest stack size");
+    }
+    registers_[4] = stackBytes;
+}
 
 std::uint8_t GuestCpu::read8() {
     if (ip_ >= program_.size()) throw std::runtime_error("Guest instruction exceeds code bounds");
@@ -30,6 +35,36 @@ void GuestCpu::jumpRelative(std::int32_t displacement) {
     ip_ = static_cast<std::size_t>(destination);
 }
 
+std::uint64_t GuestCpu::readMemory64(std::uint64_t address) const {
+    if (address > memory_.size() || memory_.size() - static_cast<std::size_t>(address) < 8) {
+        throw std::runtime_error("Guest memory read out of bounds");
+    }
+    std::uint64_t value = 0;
+    for (unsigned i = 0; i < 8; ++i) value |= std::uint64_t{memory_[static_cast<std::size_t>(address) + i]} << (i * 8);
+    return value;
+}
+
+void GuestCpu::writeMemory64(std::uint64_t address, std::uint64_t value) {
+    if (address > memory_.size() || memory_.size() - static_cast<std::size_t>(address) < 8) {
+        throw std::runtime_error("Guest memory write out of bounds");
+    }
+    for (unsigned i = 0; i < 8; ++i) memory_[static_cast<std::size_t>(address) + i] = static_cast<std::uint8_t>(value >> (i * 8));
+}
+
+void GuestCpu::push64(std::uint64_t value) {
+    if (registers_[4] < 8 || registers_[4] > memory_.size()) throw std::runtime_error("Guest stack overflow");
+    const auto next = registers_[4] - 8;
+    writeMemory64(next, value);
+    registers_[4] = next;
+}
+
+std::uint64_t GuestCpu::pop64() {
+    const auto address = registers_[4];
+    const auto value = readMemory64(address);
+    registers_[4] += 8;
+    return value;
+}
+
 std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
     for (std::size_t count = 0; count < maxInstructions; ++count) {
         bool wide = false;
@@ -40,7 +75,25 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             extended = (opcode & 1) != 0;
             opcode = read8();
         }
-        if (opcode == 0xC3) return registers_[0];
+        if (opcode == 0xC3) {
+            if (wide || extended) throw std::runtime_error("Unsupported RET prefix");
+            if (callDepth_ == 0) return registers_[0];
+            const auto destination = pop64();
+            if (destination >= program_.size()) throw std::runtime_error("Guest return outside code bounds");
+            ip_ = static_cast<std::size_t>(destination);
+            --callDepth_;
+            continue;
+        }
+        if (opcode >= 0x50 && opcode <= 0x57) {
+            const auto index = static_cast<std::size_t>(opcode - 0x50 + (extended ? 8 : 0));
+            push64(registers_[index]);
+            continue;
+        }
+        if (opcode >= 0x58 && opcode <= 0x5F) {
+            const auto index = static_cast<std::size_t>(opcode - 0x58 + (extended ? 8 : 0));
+            registers_[index] = pop64();
+            continue;
+        }
         if (opcode >= 0xB8 && opcode <= 0xBF) {
             const auto index = static_cast<std::size_t>((opcode - 0xB8) + (extended ? 8 : 0));
             if (wide) throw std::runtime_error("64-bit immediate MOV not yet supported");
@@ -48,13 +101,27 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             continue;
         }
         if (opcode == 0x05 && !wide && !extended) {
-            const auto result = static_cast<std::uint32_t>(registers_[0]) + read32();
+            const auto left = static_cast<std::uint32_t>(registers_[0]);
+            const auto right = read32();
+            const auto result = static_cast<std::uint32_t>(left + right);
             registers_[0] = result;
             zeroFlag_ = result == 0;
+            carryFlag_ = result < left;
             continue;
         }
         if (opcode == 0x3D && !wide && !extended) {
-            zeroFlag_ = static_cast<std::uint32_t>(registers_[0]) == read32();
+            const auto left = static_cast<std::uint32_t>(registers_[0]);
+            const auto right = read32();
+            zeroFlag_ = left == right;
+            carryFlag_ = left < right;
+            continue;
+        }
+        if (opcode == 0xE8 && !wide && !extended) {
+            const auto displacement = readSigned32();
+            const auto returnAddress = ip_;
+            jumpRelative(displacement);
+            push64(returnAddress);
+            ++callDepth_;
             continue;
         }
         if (opcode == 0xE9 && !wide && !extended) {
