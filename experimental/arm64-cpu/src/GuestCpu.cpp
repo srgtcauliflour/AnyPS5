@@ -154,7 +154,7 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             continue;
         }
         if (opcode == 0xC3) {
-            if (wide || extended || rexR || rexX) throw std::runtime_error("Unsupported RET prefix");
+            if (wide || extended) throw std::runtime_error("Unsupported RET prefix");
             if (callDepth_ == 0) return registers_[0];
             const auto destination = pop64();
             if (destination >= program_.size()) throw std::runtime_error("Guest return outside code bounds");
@@ -163,25 +163,22 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             continue;
         }
         if (opcode >= 0x50 && opcode <= 0x57) {
-            if (rexR || rexX) throw std::runtime_error("Unsupported PUSH prefix");
             const auto index = static_cast<std::size_t>(opcode - 0x50 + (extended ? 8 : 0));
             push64(registers_[index]);
             continue;
         }
         if (opcode >= 0x58 && opcode <= 0x5F) {
-            if (rexR || rexX) throw std::runtime_error("Unsupported POP prefix");
             const auto index = static_cast<std::size_t>(opcode - 0x58 + (extended ? 8 : 0));
             registers_[index] = pop64();
             continue;
         }
         if (opcode >= 0xB8 && opcode <= 0xBF) {
-            if (rexR || rexX) throw std::runtime_error("Unsupported MOV immediate prefix");
             const auto index = static_cast<std::size_t>((opcode - 0xB8) + (extended ? 8 : 0));
             if (wide) throw std::runtime_error("64-bit immediate MOV not yet supported");
             registers_[index] = read32();
             continue;
         }
-        if (opcode == 0x05 && !wide && !extended && !rexR && !rexX) {
+        if (opcode == 0x05 && !wide && !extended) {
             const auto left = static_cast<std::uint32_t>(registers_[0]);
             const auto right = read32();
             const auto result = static_cast<std::uint32_t>(left + right);
