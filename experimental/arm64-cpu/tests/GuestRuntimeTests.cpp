@@ -65,6 +65,24 @@ checked_guard:
     bad = valid;
     bad.pop_back(); // truncated initialized data
     if (!rejects(bad)) return EXIT_FAILURE;
+    // AG64 v2: mov edi,<relocated-data-address>; mov eax,[rdi]; ret.
+    // The relocation patches the immediate at code offset 1.
+    std::vector<std::uint8_t> relocated{'A','G','6','4'};
+    u32(relocated, 2); u32(relocated, 8); u32(relocated, 4);
+    u32(relocated, 0); u32(relocated, 1);
+    relocated.insert(relocated.end(), {0xBF,0,0,0,0,0x8B,0x07,0xC3});
+    relocated.insert(relocated.end(), {77,0,0,0});
+    u32(relocated, 1); u32(relocated, 0);
+    if (GuestRuntime::load(relocated).run() != 77) return EXIT_FAILURE;
+    bad = relocated;
+    bad[bad.size() - 8] = 255; // invalid code patch offset
+    if (!rejects(bad)) return EXIT_FAILURE;
+    bad = relocated;
+    bad[bad.size() - 4] = 255; // invalid target data offset
+    if (!rejects(bad)) return EXIT_FAILURE;
+    bad = relocated;
+    bad.pop_back(); // truncated relocation table
+    if (!rejects(bad)) return EXIT_FAILURE;
     std::puts("AG64 image loader, data/stack isolation and malformed input tests passed");
     return EXIT_SUCCESS;
 }
