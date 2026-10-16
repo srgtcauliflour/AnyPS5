@@ -231,13 +231,11 @@ int main() {
     };
     if (GuestCpu(testNonzero).run() != 42) return EXIT_FAILURE;
 
-    // 64-bit ADD preserves the high half of the operand.
+    // REX.W ADD also accepts the 64-bit operand width.
     const std::array<std::uint8_t, 4> wideAdd{
         0x48, 0x03, 0xC1, 0xC3
     };
     GuestCpu wideAddCpu(wideAdd);
-    // The 64-bit operand is loaded using the public register-independent
-    // guest memory path in a separate test below.
     if (wideAddCpu.run() != 0) return EXIT_FAILURE;
     return EXIT_SUCCESS;
 }
