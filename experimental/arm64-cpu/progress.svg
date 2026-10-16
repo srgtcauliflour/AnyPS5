@@ -6,12 +6,12 @@
 <rect x="36" y="111" width="155" height="48" fill="#3d4249"/>
 <text class="body" x="55" y="142">CPU features*</text>
 <rect x="191" y="111" width="123" height="48" fill="#56c900"/>
-<text class="body" x="209" y="142">64.7%</text>
+<text class="body" x="209" y="142">70.6%</text>
 <rect x="327" y="111" width="166" height="48" fill="#3d4249"/>
 <text class="body" x="343" y="142">Milestone</text>
 <rect x="493" y="111" width="108" height="48" fill="#56c900"/>
-<text class="body" x="512" y="142">M3</text>
-<text class="body" x="36" y="204">Experimental CPU feature inventory: 64.7% (11/17)</text>
+<text class="body" x="512" y="142">M4</text>
+<text class="body" x="36" y="204">Experimental CPU feature inventory: 70.6% (12/17)</text>
 <text class="muted" x="36" y="229">Green = implemented · Grey = planned · Amber = in progress</text>
 <rect x="36" y="246" width="368" height="264" fill="#242a31" stroke="#51565d"/>
 <rect x="36" y="246" width="368" height="31" fill="#333941"/>
@@ -49,7 +49,7 @@
 <rect x="690.3" y="285.0" width="85.8" height="107.0" fill="#37b84e" stroke="#171c23" stroke-width="1"/>
 <text class="cell" x="695.3" y="302.0">RIP-relative</text>
 <text class="cell" x="695.3" y="317.0">addressing</text>
-<rect x="424.0" y="395.0" width="85.8" height="107.0" fill="#666971" stroke="#171c23" stroke-width="1"/>
+<rect x="424.0" y="395.0" width="85.8" height="107.0" fill="#37b84e" stroke="#171c23" stroke-width="1"/>
 <text class="cell" x="429.0" y="412.0">Arithmetic</text>
 <text class="cell" x="429.0" y="427.0">ModR/M</text>
 <text class="cell" x="429.0" y="442.0">instructions</text>
