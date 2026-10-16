@@ -1528,5 +1528,87 @@ int main() {
         return EXIT_FAILURE;
     }
 
+    // M28: immediate OR/AND/XOR and TEST, including flags and memory.
+    const auto immediateLogic = std::to_array<std::uint8_t>({
+        0xB8, 0x0F, 0, 0, 0,   // eax=15
+        0x83, 0xC8, 0x20,     // or eax,32 -> 47
+        0x83, 0xE0, 0x2A,     // and eax,42 -> 42
+        0x83, 0xF0, 0x00,     // xor eax,0 -> 42
+        0xC3
+    });
+    if (GuestCpu(immediateLogic).run() != 42) {
+        std::fprintf(stderr, "M28 imm8 logic failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto immediateLogic32 = std::to_array<std::uint8_t>({
+        0xB8, 0xFF, 0, 0, 0,
+        0x81, 0xE0, 0x2A, 0, 0, 0, // and eax,42
+        0x81, 0xC8, 0, 0, 0, 0,    // or eax,0
+        0x81, 0xF0, 0, 0, 0, 0,    // xor eax,0
+        0xC3
+    });
+    if (GuestCpu(immediateLogic32).run() != 42) {
+        std::fprintf(stderr, "M28 imm32 logic failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto immediateLogicWide = std::to_array<std::uint8_t>({
+        0x48, 0xB8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0x48, 0x81, 0xE0, 42, 0, 0, 0, // and rax,42
+        0xC3
+    });
+    if (GuestCpu(immediateLogicWide).run() != 42) {
+        std::fprintf(stderr, "M28 wide immediate AND failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto immediateLogicMemory = std::to_array<std::uint8_t>({
+        0xB8, 15, 0, 0, 0,
+        0x89, 0x44, 0x24, 0xF8, // mov [rsp-8],eax
+        0x83, 0x4C, 0x24, 0xF8, 0x20, // or [rsp-8],32
+        0x83, 0x64, 0x24, 0xF8, 0x2A, // and [rsp-8],42
+        0x8B, 0x44, 0x24, 0xF8, 0xC3
+    });
+    if (GuestCpu(immediateLogicMemory, 64).run() != 42) {
+        std::fprintf(stderr, "M28 immediate memory logic failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto testImmediate = std::to_array<std::uint8_t>({
+        0xB8, 42, 0, 0, 0,
+        0xF7, 0xC0, 1, 0, 0, 0, // test eax,1 -> ZF=1
+        0x0F, 0x94, 0xC1,       // sete cl
+        0x0F, 0xB6, 0xC1, 0xC3
+    });
+    if (GuestCpu(testImmediate).run() != 1) {
+        std::fprintf(stderr, "M28 TEST imm32 flags failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto testImmediateWide = std::to_array<std::uint8_t>({
+        0x48, 0xB8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0x48, 0xF7, 0xC0, 42, 0, 0, 0,
+        0xC3
+    });
+    if (GuestCpu(testImmediateWide).run() != UINT64_MAX) {
+        std::fprintf(stderr, "M28 TEST changed destination at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto testImmediateRip = std::to_array<std::uint8_t>({
+        0xF7, 0x05, 0xF6, 0xFF, 0xFF, 0xFF, 1, 0, 0, 0,
+        0x0F, 0x94, 0xC0, 0xC3
+    });
+    GuestCpu testImmediateRipCpu(testImmediateRip, 64);
+    testImmediateRipCpu.writeMemory32(0, 42);
+    if (testImmediateRipCpu.run() != 1 ||
+        testImmediateRipCpu.readMemory32(0) != 42) {
+        std::fprintf(stderr, "M28 RIP-relative TEST failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto truncatedTest = std::to_array<std::uint8_t>({0xF7, 0xC0, 1, 0});
+    rejected = false;
+    try { GuestCpu(truncatedTest).run(); }
+    catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) {
+        std::fprintf(stderr, "M28 truncated TEST accepted at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
     return EXIT_SUCCESS;
 }
