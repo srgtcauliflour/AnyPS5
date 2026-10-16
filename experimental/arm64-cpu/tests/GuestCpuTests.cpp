@@ -189,7 +189,7 @@ int main() {
 
     // Register arithmetic (ADD r32,r/m32 and SUB r32,r/m32).
     // The final ADD immediate is executed before the terminal RET.
-    const std::array<std::uint8_t, 18> arithmeticReturn{
+    const std::array<std::uint8_t, 20> arithmeticReturn{
         0xB8, 40, 0, 0, 0,
         0xB9, 4, 0, 0, 0,
         0x03, 0xC1,
@@ -200,7 +200,7 @@ int main() {
     if (GuestCpu(arithmeticReturn).run() != 42) return EXIT_FAILURE;
 
     // Store 40 at [RSP-8], add 2 directly in guest memory, reload 42.
-    const std::array<std::uint8_t, 24> memoryArithmetic{
+    const std::array<std::uint8_t, 23> memoryArithmetic{
         0xB8, 40, 0, 0, 0,
         0x89, 0x44, 0x24, 0xF8,
         0xB8, 2, 0, 0, 0,
