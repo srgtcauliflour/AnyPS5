@@ -130,5 +130,65 @@ int main() {
     rejected = false;
     try { GuestCpu(truncatedModrm).run(); } catch (const std::runtime_error&) { rejected = true; }
     if (!rejected) return EXIT_FAILURE;
+
+    // Use RSP-8 so the full operand fits inside the bounded guest memory.
+    const std::array<std::uint8_t, 19> memoryRoundtrip{
+        0xB8, 0x2A, 0, 0, 0,
+        0x89, 0x44, 0x24, 0xF8,
+        0xB8, 0, 0, 0, 0,
+        0x8B, 0x44, 0x24, 0xF8,
+        0xC3
+    };
+    GuestCpu memoryRoundtripCpu(memoryRoundtrip, 64);
+    if (memoryRoundtripCpu.run() != 42 || memoryRoundtripCpu.readMemory32(56) != 42)
+        return EXIT_FAILURE;
+
+    // REX.W: 64-bit register -> memory -> register roundtrip.
+    const std::array<std::uint8_t, 11> wideMemory{
+        0x48, 0x89, 0x64, 0x24, 0xF8,
+        0x48, 0x8B, 0x44, 0x24, 0xF8,
+        0xC3
+    };
+    GuestCpu wideCpu(wideMemory, 64);
+    if (wideCpu.run() != 64) return EXIT_FAILURE;
+    if (wideCpu.readMemory64(56) != 64) return EXIT_FAILURE;
+
+    // REX.R selects R8 as the destination register.
+    const std::array<std::uint8_t, 10> rexRMov{
+        0xB8, 0x2A, 0, 0, 0,
+        0x44, 0x8B, 0xC0,
+        0xC3, 0x90
+    };
+    GuestCpu rexRCpu(rexRMov);
+    if (rexRCpu.run() != 42 || rexRCpu.registerValue(8) != 42)
+        return EXIT_FAILURE;
+
+    // SIB addressing: [RSP + RAX*2 - 16] resolves to address 56.
+    const std::array<std::uint8_t, 15> sibIndexed{
+        0xB8, 0x04, 0, 0, 0,
+        0x8B, 0x44, 0x44, 0xF0,
+        0xC3, 0x90, 0x90, 0x90, 0x90, 0x90
+    };
+    GuestCpu sibCpu(sibIndexed, 64);
+    sibCpu.writeMemory32(56, 42);
+    if (sibCpu.run() != 42) return EXIT_FAILURE;
+
+    // RIP-relative address uses the instruction pointer after disp32.
+    const std::array<std::uint8_t, 7> ripRelative{
+        0x8B, 0x05, 0x08, 0, 0, 0, 0xC3
+    };
+    GuestCpu ripCpu(ripRelative, 64);
+    ripCpu.writeMemory32(14, 42);
+    if (ripCpu.run() != 42) return EXIT_FAILURE;
+
+    // Reject malformed and out-of-range operands.
+    const std::array<std::uint8_t, 2> truncatedDisp{0x8B, 0x45};
+    rejected = false;
+    try { GuestCpu(truncatedDisp).run(); } catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) return EXIT_FAILURE;
+    const std::array<std::uint8_t, 4> badRex{0x42, 0xB8, 0x00, 0xC3};
+    rejected = false;
+    try { GuestCpu(badRex).run(); } catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) return EXIT_FAILURE;
     return EXIT_SUCCESS;
 }
