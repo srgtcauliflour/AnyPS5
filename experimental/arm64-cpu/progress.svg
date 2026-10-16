@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1140 564" role="img" aria-label="AnyPS5 iOS CPU feature inventory">
+<rect width="100%" height="100%" fill="#101722"/>
+<style>text{font-family:Arial,Helvetica,sans-serif}.title{fill:#f2f7ff;font-weight:bold;font-size:32px}.sub{fill:#a6b6c9;font-size:17px}.head{fill:#e8effa;font-size:18px;font-weight:bold}.item{fill:#d7e0ec;font-size:15px}.small{fill:#a6b6c9;font-size:13px}</style>
+<text class="title" x="44" y="58">AnyPS5 / iOS + ARM64</text>
+<text class="sub" x="44" y="91">M3 — ModR/M memory addressing · Updated 2026-10-16</text>
+<text class="head" x="44" y="144">Feature inventory: 11 / 17 implemented</text>
+<text class="small" x="44" y="169">Not an emulator completion percentage</text>
+<rect x="44" y="199" width="338" height="307" rx="12" fill="#1b2635" stroke="#35455a"/>
+<text class="head" x="62" y="235">CPU foundations</text>
+<rect x="62" y="254" width="13" height="13" rx="3" fill="#31c96b"/>
+<text class="item" x="84" y="266">Registers and execution budget</text>
+<rect x="62" y="303" width="13" height="13" rx="3" fill="#31c96b"/>
+<text class="item" x="84" y="315">Branches and comparisons</text>
+<rect x="62" y="352" width="13" height="13" rx="3" fill="#31c96b"/>
+<text class="item" x="84" y="364">CALL / RET and stack</text>
+<rect x="62" y="401" width="13" height="13" rx="3" fill="#31c96b"/>
+<text class="item" x="84" y="413">Guest memory bounds</text>
+<rect x="62" y="450" width="13" height="13" rx="3" fill="#465268"/>
+<text class="item" x="84" y="462">Full x86-64 instruction coverage</text>
+<rect x="400" y="199" width="338" height="307" rx="12" fill="#1b2635" stroke="#35455a"/>
+<text class="head" x="418" y="235">Instruction decoding</text>
+<rect x="418" y="254" width="13" height="13" rx="3" fill="#31c96b"/>
+<text class="item" x="440" y="266">MOV register / memory</text>
+<rect x="418" y="303" width="13" height="13" rx="3" fill="#31c96b"/>
+<text class="item" x="440" y="315">ModR/M and SIB addressing</text>
+<rect x="418" y="352" width="13" height="13" rx="3" fill="#31c96b"/>
+<text class="item" x="440" y="364">32/64-bit MOV variants</text>
+<rect x="418" y="401" width="13" height="13" rx="3" fill="#31c96b"/>
+<text class="item" x="440" y="413">RIP-relative addressing</text>
+<rect x="418" y="450" width="13" height="13" rx="3" fill="#465268"/>
+<text class="item" x="440" y="462">Arithmetic ModR/M instructions</text>
+<rect x="418" y="499" width="13" height="13" rx="3" fill="#465268"/>
+<text class="item" x="440" y="511">SIMD / AVX instructions</text>
+<rect x="756" y="199" width="338" height="307" rx="12" fill="#1b2635" stroke="#35455a"/>
+<text class="head" x="774" y="235">Platform integration</text>
+<rect x="774" y="254" width="13" height="13" rx="3" fill="#31c96b"/>
+<text class="item" x="796" y="266">Portable C++20 library</text>
+<rect x="774" y="303" width="13" height="13" rx="3" fill="#31c96b"/>
+<text class="item" x="796" y="315">Cross-platform CI configured</text>
+<rect x="774" y="352" width="13" height="13" rx="3" fill="#31c96b"/>
+<text class="item" x="796" y="364">iOS ARM64 compilation target</text>
+<rect x="774" y="401" width="13" height="13" rx="3" fill="#465268"/>
+<text class="item" x="796" y="413">iPhone runtime integration</text>
+<rect x="774" y="450" width="13" height="13" rx="3" fill="#465268"/>
+<text class="item" x="796" y="462">PS5 executable loading</text>
+<rect x="774" y="499" width="13" height="13" rx="3" fill="#465268"/>
+<text class="item" x="796" y="511">Graphics and system services</text>
+<rect x="44" y="519" width="12" height="12" rx="2" fill="#31c96b"/>
+<text class="small" x="64" y="530">Implemented</text>
+<rect x="214" y="519" width="12" height="12" rx="2" fill="#f5b83d"/>
+<text class="small" x="234" y="530">In progress</text>
+<rect x="384" y="519" width="12" height="12" rx="2" fill="#465268"/>
+<text class="small" x="404" y="530">Planned</text>
+</svg>
