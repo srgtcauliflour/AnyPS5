@@ -22,6 +22,7 @@ extern "C" unsigned fixture_reverse_bits(unsigned);
 extern "C" unsigned fixture_array_sum(const unsigned*, unsigned);
 extern "C" unsigned fixture_array_sort(unsigned*, unsigned);
 extern "C" unsigned fixture_recursive_factorial(unsigned, unsigned (*)(unsigned));
+extern "C" unsigned fixture_callback_twice(unsigned, unsigned (*)(unsigned));
 static unsigned nativeRecursive(unsigned n) {
     return fixture_recursive_factorial(n, nativeRecursive);
 }
@@ -169,6 +170,43 @@ int main() {
             if (message.find("Unsupported") != std::string::npos) ++unsupported;
             else ++other;
             std::fprintf(stderr, "ERROR recursive_factorial(%u): %s\\n", n, e.what());
+        }
+    }
+    // Two independently compiled C functions in one guest code image.
+    // The caller receives the callee's guest offset in RSI; CALL through
+    // that pointer must preserve nested return addresses and stack state.
+    for (unsigned n = 0; n <= 64; ++n) {
+        const auto caller = std::span<const std::uint8_t>(
+            stage3_generated::fixture_callback_twice);
+        const auto callee = std::span<const std::uint8_t>(
+            stage3_generated::fixture_bitmix);
+        const auto calleeOffset = static_cast<std::uint32_t>(10 + caller.size());
+        std::vector<std::uint8_t> code{0xBF};
+        const auto put32 = [&](std::uint32_t value) {
+            for (unsigned i = 0; i < 4; ++i)
+                code.push_back(static_cast<std::uint8_t>(value >> (i * 8)));
+        };
+        put32(n);
+        code.push_back(0xBE);
+        put32(calleeOffset);
+        code.insert(code.end(), caller.begin(), caller.end());
+        code.insert(code.end(), callee.begin(), callee.end());
+        ++total;
+        try {
+            const auto expected = fixture_callback_twice(n, fixture_bitmix);
+            const auto actual = GuestCpu(code, 65536).run(100000);
+            if (actual == expected) ++passed;
+            else {
+                ++mismatch;
+                std::fprintf(stderr,
+                    "MISMATCH callback_twice(%u) expected=%u actual=%llu\\n",
+                    n, expected, static_cast<unsigned long long>(actual));
+            }
+        } catch (const std::exception& e) {
+            const std::string message(e.what());
+            if (message.find("Unsupported") != std::string::npos) ++unsupported;
+            else ++other;
+            std::fprintf(stderr, "ERROR callback_twice(%u): %s\\n", n, e.what());
         }
     }
     std::printf("STAGE3 COMPATIBILITY %u/%u (%.2f%%) unsupported=%u mismatches=%u errors=%u\n",
