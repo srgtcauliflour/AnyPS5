@@ -11,6 +11,39 @@ GuestCpu::GuestCpu(std::span<const std::uint8_t> program, std::size_t stackBytes
     registers_[4] = stackBytes;
 }
 
+void GuestCpu::setMemoryRegions(std::size_t dataBegin, std::size_t dataEnd,
+                                std::size_t stackBegin) {
+    if (dataBegin >= dataEnd || dataEnd > stackBegin ||
+        stackBegin >= memory_.size() || stackBegin < 8)
+        throw std::invalid_argument("Invalid guest data/stack layout");
+    dataBegin_ = dataBegin;
+    dataEnd_ = dataEnd;
+    stackBegin_ = stackBegin;
+    regionProtection_ = true;
+}
+
+void GuestCpu::setRegister(std::size_t index, std::uint64_t value) {
+    if (index >= registers_.size()) throw std::out_of_range("Invalid guest register index");
+    if (index == 4 && regionProtection_ &&
+        (value < stackBegin_ || value > memory_.size()))
+        throw std::invalid_argument("Guest stack pointer outside stack region");
+    registers_[index] = value;
+}
+
+void GuestCpu::checkMemory(std::uint64_t address, std::size_t bytes, bool write) const {
+    if (address > memory_.size() ||
+        bytes > memory_.size() - static_cast<std::size_t>(address))
+        throw std::runtime_error("Guest memory access out of bounds");
+    if (regionProtection_) {
+        const auto start = static_cast<std::size_t>(address);
+        const auto end = start + bytes;
+        if (!((start >= dataBegin_ && end <= dataEnd_) ||
+              (start >= stackBegin_ && end <= memory_.size())))
+            throw std::runtime_error(write ? "Guest write to unmapped memory" :
+                                               "Guest read from unmapped memory");
+    }
+}
+
 std::uint8_t GuestCpu::read8() {
     if (ip_ >= program_.size()) throw std::runtime_error("Guest instruction exceeds code bounds");
     return program_[ip_++];
@@ -37,25 +70,20 @@ void GuestCpu::jumpRelative(std::int32_t displacement) {
 }
 
 std::uint64_t GuestCpu::readMemory64(std::uint64_t address) const {
-    if (address > memory_.size() || memory_.size() - static_cast<std::size_t>(address) < 8) {
-        throw std::runtime_error("Guest memory read out of bounds");
-    }
+    checkMemory(address, 8, false);
     std::uint64_t value = 0;
     for (unsigned i = 0; i < 8; ++i) value |= std::uint64_t{memory_[static_cast<std::size_t>(address) + i]} << (i * 8);
     return value;
 }
 
 void GuestCpu::writeMemory64(std::uint64_t address, std::uint64_t value) {
-    if (address > memory_.size() || memory_.size() - static_cast<std::size_t>(address) < 8) {
-        throw std::runtime_error("Guest memory write out of bounds");
-    }
+    checkMemory(address, 8, true);
     for (unsigned i = 0; i < 8; ++i) memory_[static_cast<std::size_t>(address) + i] = static_cast<std::uint8_t>(value >> (i * 8));
 }
 
 
 std::uint32_t GuestCpu::readMemory32(std::uint64_t address) const {
-    if (address > memory_.size() || memory_.size() - static_cast<std::size_t>(address) < 4)
-        throw std::runtime_error("Guest memory read out of bounds");
+    checkMemory(address, 4, false);
     std::uint32_t value = 0;
     for (unsigned i = 0; i < 4; ++i)
         value |= std::uint32_t{memory_[static_cast<std::size_t>(address) + i]} << (i * 8);
@@ -63,8 +91,7 @@ std::uint32_t GuestCpu::readMemory32(std::uint64_t address) const {
 }
 
 void GuestCpu::writeMemory32(std::uint64_t address, std::uint32_t value) {
-    if (address > memory_.size() || memory_.size() - static_cast<std::size_t>(address) < 4)
-        throw std::runtime_error("Guest memory write out of bounds");
+    checkMemory(address, 4, true);
     for (unsigned i = 0; i < 4; ++i)
         memory_[static_cast<std::size_t>(address) + i] = static_cast<std::uint8_t>(value >> (i * 8));
 }
@@ -123,6 +150,8 @@ void GuestCpu::writeOperand(const Operand& operand, std::uint64_t value, bool wi
 void GuestCpu::push64(std::uint64_t value) {
     if (registers_[4] < 8 || registers_[4] > memory_.size()) throw std::runtime_error("Guest stack overflow");
     const auto next = registers_[4] - 8;
+    if (regionProtection_ && next < stackBegin_)
+        throw std::runtime_error("Guest stack overflow into data region");
     writeMemory64(next, value);
     registers_[4] = next;
 }
