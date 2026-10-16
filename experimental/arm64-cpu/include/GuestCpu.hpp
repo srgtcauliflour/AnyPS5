@@ -25,6 +25,10 @@ private:
     std::size_t ip_ = 0;
     bool zeroFlag_ = false;
     bool carryFlag_ = false;
+    bool signFlag_ = false;
+    bool overflowFlag_ = false;
+    void updateArithmeticFlags(std::uint64_t lhs, std::uint64_t rhs, std::uint64_t result, bool wide, bool subtraction);
+    bool evaluateCondition(std::uint8_t condition) const;
     std::size_t callDepth_ = 0;
     struct Operand { bool isRegister; std::size_t index; std::uint64_t address; };
     Operand decodeOperand(std::uint8_t modrm, bool rexB, bool rexX);
