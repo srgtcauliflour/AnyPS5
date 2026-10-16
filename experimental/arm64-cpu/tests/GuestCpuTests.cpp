@@ -937,5 +937,63 @@ int main() {
         return EXIT_FAILURE;
     }
 
+    // M20: RIP-relative ModR/M with an immediate uses the address
+    // after the entire instruction, not the address before the immediate.
+    const auto ripAddImmediate = std::to_array<std::uint8_t>({
+        0x81, 0x05, 0xF6, 0xFF, 0xFF, 0xFF, // [RIP-10] -> guest address 0
+        21, 0, 0, 0, 0xC3
+    });
+    GuestCpu ripAddCpu(ripAddImmediate, 64);
+    ripAddCpu.writeMemory32(0, 21);
+    if (ripAddCpu.run() != 0 || ripAddCpu.readMemory32(0) != 42) {
+        std::fprintf(stderr, "M20 RIP-relative imm32 address failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto ripAddByte = std::to_array<std::uint8_t>({
+        0x83, 0x05, 0xF9, 0xFF, 0xFF, 0xFF, // [RIP-7] -> address 0
+        21, 0xC3
+    });
+    GuestCpu ripByteCpu(ripAddByte, 64);
+    ripByteCpu.writeMemory32(0, 21);
+    if (ripByteCpu.run() != 0 || ripByteCpu.readMemory32(0) != 42) {
+        std::fprintf(stderr, "M20 RIP-relative imm8 address failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto ripShiftImmediate = std::to_array<std::uint8_t>({
+        0xC1, 0x25, 0xF9, 0xFF, 0xFF, 0xFF, // shl dword [RIP-7],1
+        1, 0xC3
+    });
+    GuestCpu ripShiftCpu(ripShiftImmediate, 64);
+    ripShiftCpu.writeMemory32(0, 21);
+    if (ripShiftCpu.run() != 0 || ripShiftCpu.readMemory32(0) != 42) {
+        std::fprintf(stderr, "M20 RIP-relative shift address failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    // A truncated immediate must fail before any memory mutation.
+    const auto truncatedRipImmediate = std::to_array<std::uint8_t>({
+        0x81, 0x05, 0xF6, 0xFF, 0xFF, 0xFF, 21, 0
+    });
+    GuestCpu truncatedRipCpu(truncatedRipImmediate, 64);
+    truncatedRipCpu.writeMemory32(0, 21);
+    rejected = false;
+    try { truncatedRipCpu.run(); }
+    catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected || truncatedRipCpu.readMemory32(0) != 21) {
+        std::fprintf(stderr, "M20 truncated RIP immediate failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    // A valid RIP-relative address may still fail the guest-memory bounds check.
+    const auto invalidRipAddress = std::to_array<std::uint8_t>({
+        0x81, 0x05, 0x3B, 0, 0, 0, // [RIP+59] -> address 69, beyond 64 bytes
+        21, 0, 0, 0, 0xC3
+    });
+    rejected = false;
+    try { GuestCpu(invalidRipAddress, 64).run(); }
+    catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) {
+        std::fprintf(stderr, "M20 invalid RIP address accepted at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
     return EXIT_SUCCESS;
 }
