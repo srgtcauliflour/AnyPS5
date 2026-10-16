@@ -201,16 +201,19 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             else registers_[reg] = readOperand(operand, wide);
             continue;
         }
-        // ModR/M arithmetic: 01/03 ADD, 29/2B SUB, 31/33 XOR, 39/3B CMP, 85 TEST.
+        // ModR/M arithmetic and logic: ADD, OR, AND, SUB, XOR, CMP, TEST.
         // Operands are 32-bit by default and 64-bit with REX.W.
         if (opcode == 0x01 || opcode == 0x03 ||
+            opcode == 0x09 || opcode == 0x0B ||
+            opcode == 0x21 || opcode == 0x23 ||
             opcode == 0x29 || opcode == 0x2B ||
             opcode == 0x31 || opcode == 0x33 ||
             opcode == 0x39 || opcode == 0x3B || opcode == 0x85) {
             const auto modrm = read8();
             const auto reg = static_cast<std::size_t>(((modrm >> 3) & 7) + (rexR ? 8 : 0));
             const auto operand = decodeOperand(modrm, extended, rexX);
-            const bool reversed = opcode == 0x03 || opcode == 0x2B || opcode == 0x33 || opcode == 0x3B;
+            const bool reversed = opcode == 0x03 || opcode == 0x0B || opcode == 0x23 ||
+                                  opcode == 0x2B || opcode == 0x33 || opcode == 0x3B;
             const auto mask = wide ? UINT64_MAX : static_cast<std::uint64_t>(UINT32_MAX);
             const auto lhs = (reversed ? registers_[reg] : readOperand(operand, wide)) & mask;
             const auto rhs = (reversed ? readOperand(operand, wide) : registers_[reg]) & mask;
@@ -218,8 +221,12 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             if (opcode == 0x01 || opcode == 0x03) {
                 result = (lhs + rhs) & mask;
                 updateArithmeticFlags(lhs, rhs, result, wide, false);
-            } else if (opcode == 0x31 || opcode == 0x33 || opcode == 0x85) {
-                result = opcode == 0x85 ? lhs & rhs : lhs ^ rhs;
+            } else if (opcode == 0x09 || opcode == 0x0B ||
+                       opcode == 0x21 || opcode == 0x23 ||
+                       opcode == 0x31 || opcode == 0x33 || opcode == 0x85) {
+                result = (opcode == 0x09 || opcode == 0x0B) ? (lhs | rhs) :
+                         (opcode == 0x21 || opcode == 0x23 || opcode == 0x85) ? (lhs & rhs) :
+                         (lhs ^ rhs);
                 carryFlag_ = false;
                 overflowFlag_ = false;
                 signFlag_ = (result & (wide ? (std::uint64_t{1} << 63) : (std::uint64_t{1} << 31))) != 0;
