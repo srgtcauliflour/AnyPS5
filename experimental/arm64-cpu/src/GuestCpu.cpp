@@ -242,8 +242,13 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
         }
         if (opcode >= 0xB8 && opcode <= 0xBF) {
             const auto index = static_cast<std::size_t>((opcode - 0xB8) + (extended ? 8 : 0));
-            if (wide) throw std::runtime_error("64-bit immediate MOV not yet supported");
-            registers_[index] = read32();
+            if (wide) {
+                const auto low = static_cast<std::uint64_t>(read32());
+                const auto high = static_cast<std::uint64_t>(read32());
+                registers_[index] = low | (high << 32);
+            } else {
+                registers_[index] = read32();
+            }
             continue;
         }
         if (opcode == 0x05 && !wide && !extended) {
