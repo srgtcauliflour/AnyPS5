@@ -29,7 +29,7 @@ Registers, bounded guest memory, stack, branches, calls, core arithmetic and bit
 
 **Exit criteria:** all existing tests green on supported CI hosts; documented instruction coverage and failure list; reproducible differential suite.
 
-## Phase 3 — Compiled-program execution
+## Phase 3 — Compiled-program execution [baseline complete: 2,047/2,047 confirmed green]\n\nThe baseline covers real compiler-generated C functions, guarded arrays, sorting,\nrecursive callbacks, and separately compiled function calls. This does not\nrepresent general x86-64 software compatibility.\n\n## Phase 3 — Compiled-program execution
 
 **Deliverables**
 1. Reproducibly compile a C fixture suite to x86-64 with pinned flags/toolchains; extract function bytes with relocation checks.
@@ -39,7 +39,7 @@ Registers, bounded guest memory, stack, branches, calls, core arithmetic and bit
 
 **Exit criteria:** all selected baseline programs pass; unsupported programs are enumerated, not hidden.
 
-## Phase 4 — Runtime and guest memory model
+## Phase 4 — Runtime and guest memory model [active]\n\n**First batch:** opt-in guest data/stack regions with guard gap, bounded AG64\nversion-1 image loader (entry zero only), initialized data, explicit register\nsetup, malformed image tests, and cross-platform CTest coverage. No ELF,\nrelocation processing, syscall emulation or general ABI yet.\n\n## Phase 4 — Runtime and guest memory model
 
 **Deliverables:** separated code/data/stack mappings; safe memory permissions and bounds; relocations; guest ABI/calling convention; loader for a deliberately scoped object/executable format; deterministic error reporting.
 
