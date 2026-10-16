@@ -668,6 +668,7 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
                 const auto result = value &
                     (static_cast<std::uint64_t>(static_cast<std::int64_t>(immediate)) & mask);
                 zeroFlag_ = result == 0;
+                updateParity(result);
                 signFlag_ = (result & (wide ? (UINT64_C(1) << 63) : (UINT64_C(1) << 31))) != 0;
                 carryFlag_ = false;
                 overflowFlag_ = false;
@@ -819,6 +820,7 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
                 result = operation == 1 ? (lhs | rhs) :
                          operation == 4 ? (lhs & rhs) : (lhs ^ rhs);
                 zeroFlag_ = result == 0;
+                updateParity(result);
                 signFlag_ = (result & (wide ? (UINT64_C(1) << 63) : (UINT64_C(1) << 31))) != 0;
                 carryFlag_ = false;
                 overflowFlag_ = false;
