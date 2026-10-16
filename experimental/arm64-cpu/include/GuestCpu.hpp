@@ -27,6 +27,8 @@ private:
     bool carryFlag_ = false;
     bool signFlag_ = false;
     bool overflowFlag_ = false;
+    bool parityFlag_ = true;
+    void updateParity(std::uint64_t value);
     void updateArithmeticFlags(std::uint64_t lhs, std::uint64_t rhs, std::uint64_t result, bool wide, bool subtraction);
     bool evaluateCondition(std::uint8_t condition) const;
     std::size_t callDepth_ = 0;
