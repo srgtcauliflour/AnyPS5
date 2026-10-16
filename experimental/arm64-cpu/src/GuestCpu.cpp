@@ -232,6 +232,49 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             continue;
         }
         // Standard compiler-generated function epilogue: mov rsp, rbp; pop rbp.
+        // Group 1 immediate arithmetic: 83 /0 ADD, /5 SUB, /7 CMP.
+        // The imm8 is sign-extended to the operand width.
+        if (opcode == 0x83) {
+            const auto modrm = read8();
+            const auto operation = static_cast<unsigned>((modrm >> 3) & 7);
+            const auto operand = decodeOperand(modrm, extended, rexX);
+            const auto immediate = static_cast<std::int8_t>(read8());
+            if (operation != 0 && operation != 5 && operation != 7)
+                throw std::runtime_error("Unsupported group 1 immediate operation");
+            const auto mask = wide ? UINT64_MAX : static_cast<std::uint64_t>(UINT32_MAX);
+            const auto lhs = readOperand(operand, wide) & mask;
+            const auto rhs = static_cast<std::uint64_t>(static_cast<std::int64_t>(immediate)) & mask;
+            const bool subtract = operation != 0;
+            const auto result = (subtract ? lhs - rhs : lhs + rhs) & mask;
+            updateArithmeticFlags(lhs, rhs, result, wide, subtract);
+            if (operation != 7) writeOperand(operand, result, wide);
+            continue;
+        }
+        // Two-operand signed IMUL r32/r64, r/m32/r/m64 (0F AF).
+        if (opcode == 0x0F) {
+            const auto second = read8();
+            if (second == 0xAF) {
+                const auto modrm = read8();
+                const auto reg = static_cast<std::size_t>(((modrm >> 3) & 7) + (rexR ? 8 : 0));
+                const auto operand = decodeOperand(modrm, extended, rexX);
+                if (wide) throw std::runtime_error("64-bit IMUL not yet supported");
+                const auto rhs = readOperand(operand, false);
+                const auto lhs = static_cast<std::uint32_t>(registers_[reg]);
+                const auto result = lhs * rhs;
+                registers_[reg] = static_cast<std::uint32_t>(result);
+                // CF/OF indicate whether the signed product was truncated.
+                const auto product = static_cast<std::int64_t>(static_cast<std::int32_t>(lhs)) *
+                                     static_cast<std::int64_t>(static_cast<std::int32_t>(rhs));
+                carryFlag_ = overflowFlag_ = product < INT32_MIN || product > INT32_MAX;
+                continue;
+            }
+            if (second >= 0x80 && second <= 0x8F) {
+                const auto displacement = readSigned32();
+                if (evaluateCondition(second & 0x0F)) jumpRelative(displacement);
+                continue;
+            }
+            throw std::runtime_error("Unsupported two-byte guest instruction");
+        }
         if (opcode == 0xC9) {
             if (wide || extended || rexR || rexX)
                 throw std::runtime_error("Unsupported LEAVE prefix");
@@ -305,14 +348,6 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             const auto offset = static_cast<std::int8_t>(read8());
             if (evaluateCondition(opcode & 0x0F)) jumpRelative(offset);
             continue;
-        }
-        if (opcode == 0x0F) {
-            const auto second = read8();
-            if (second >= 0x80 && second <= 0x8F) {
-                const auto displacement = readSigned32();
-                if (evaluateCondition(second & 0x0F)) jumpRelative(displacement);
-                continue;
-            }
         }
         throw std::runtime_error("Unsupported guest instruction");
     }
