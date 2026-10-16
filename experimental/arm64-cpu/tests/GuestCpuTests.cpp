@@ -297,5 +297,49 @@ int main() {
         0x8B, 0xC1, 0xC3
     };
     if (GuestCpu(zeroExtend).run() != 42) { std::fprintf(stderr, "GuestCpuTests failed at line %d\n", __LINE__); return EXIT_FAILURE; }
+    // LEA calculates RSP-8 without dereferencing the address.
+    const std::array<std::uint8_t, 6> leaStack{
+        0x48, 0x8D, 0x44, 0x24, 0xF8, 0xC3
+    };
+    if (GuestCpu(leaStack, 64).run() != 56) {
+        std::fprintf(stderr, "LEA stack calculation failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
+    // A conventional frame setup/teardown restores RSP and RBP.
+    const std::array<std::uint8_t, 11> framedFunction{
+        0x55, 0x48, 0x89, 0xE5,
+        0xB8, 42, 0, 0, 0,
+        0xC9, 0xC3
+    };
+    GuestCpu frameCpu(framedFunction, 64);
+    if (frameCpu.run() != 42 || frameCpu.registerValue(4) != 64 ||
+        frameCpu.registerValue(5) != 0) {
+        std::fprintf(stderr, "LEAVE frame restoration failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
+    // Realistic function-shaped machine code: CALL, PUSH RBP, MOV RBP,RSP,
+    // LEA EAX,[RDI+2], POP RBP, RET. RDI starts at zero.
+    const std::array<std::uint8_t, 15> compiledStyleWithRet{
+        0xE8, 0x01, 0, 0, 0, 0xC3,
+        0x55, 0x48, 0x89, 0xE5,
+        0x8D, 0x47, 0x02, 0x5D, 0xC3
+    };
+    GuestCpu compiledCpu(compiledStyleWithRet, 64);
+    if (compiledCpu.run() != 2 || compiledCpu.registerValue(4) != 64) {
+        std::fprintf(stderr, "Compiler-style function failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
+    // LEA with ModR/M register-direct addressing is invalid.
+    const std::array<std::uint8_t, 3> invalidLea{0x8D, 0xC0, 0xC3};
+    rejected = false;
+    try { GuestCpu(invalidLea).run(); }
+    catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) {
+        std::fprintf(stderr, "Invalid LEA was accepted at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
     return EXIT_SUCCESS;
 }
