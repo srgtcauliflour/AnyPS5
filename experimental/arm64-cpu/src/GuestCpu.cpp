@@ -179,6 +179,11 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
         bool rexX = false;
         bool hasRex = false;
         auto opcode = read8();
+        bool operand16 = false;
+        if (opcode == 0x66) {
+            operand16 = true;
+            opcode = read8();
+        }
         if (opcode >= 0x40 && opcode <= 0x4F) {
             hasRex = true;
             wide = (opcode & 8) != 0;
@@ -214,6 +219,41 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             registers_[reg] = wide ? operand.address : static_cast<std::uint32_t>(operand.address);
             continue;
         }
+        // 66 89 /r and 66 8B /r: 16-bit MOV. Register destinations
+        // preserve bits 16..63; memory accesses are exactly two bytes.
+        if (operand16 && (opcode == 0x89 || opcode == 0x8B)) {
+            const auto modrm = read8();
+            const auto reg = static_cast<std::size_t>(((modrm >> 3) & 7) + (rexR ? 8 : 0));
+            const auto operand = decodeOperand(modrm, extended, rexX);
+            const auto readWord = [&]() -> std::uint16_t {
+                if (operand.isRegister)
+                    return static_cast<std::uint16_t>(registers_[operand.index]);
+                if (operand.address > memory_.size() ||
+                    memory_.size() - static_cast<std::size_t>(operand.address) < 2)
+                    throw std::runtime_error("Guest word read out of bounds");
+                const auto address = static_cast<std::size_t>(operand.address);
+                return static_cast<std::uint16_t>(
+                    memory_[address] | (static_cast<unsigned>(memory_[address + 1]) << 8));
+            };
+            const auto writeWord = [&](std::uint16_t value) {
+                if (operand.isRegister) {
+                    registers_[operand.index] =
+                        (registers_[operand.index] & ~UINT64_C(0xFFFF)) | value;
+                } else {
+                    if (operand.address > memory_.size() ||
+                        memory_.size() - static_cast<std::size_t>(operand.address) < 2)
+                        throw std::runtime_error("Guest word write out of bounds");
+                    const auto address = static_cast<std::size_t>(operand.address);
+                    memory_[address] = static_cast<std::uint8_t>(value);
+                    memory_[address + 1] = static_cast<std::uint8_t>(value >> 8);
+                }
+            };
+            if (opcode == 0x89) writeWord(static_cast<std::uint16_t>(registers_[reg]));
+            else registers_[reg] = (registers_[reg] & ~UINT64_C(0xFFFF)) | readWord();
+            continue;
+        }
+        if (operand16)
+            throw std::runtime_error("Unsupported 16-bit operand-size instruction");
         if (opcode == 0x89 || opcode == 0x8B) {
             const auto modrm = read8();
             const auto reg = static_cast<std::size_t>(((modrm >> 3) & 7) + (rexR ? 8 : 0));
