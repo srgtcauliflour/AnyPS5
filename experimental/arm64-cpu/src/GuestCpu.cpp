@@ -267,6 +267,65 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             }
             continue;
         }
+        // Group 1 byte-immediate ALU: 80 /0 ADD, /1 OR, /4 AND,
+        // /5 SUB, /6 XOR, /7 CMP. Byte register encoding depends on REX.
+        if (opcode == 0x80) {
+            const auto modrm = read8();
+            const auto operation = static_cast<unsigned>((modrm >> 3) & 7);
+            if (operation != 0 && operation != 1 && operation != 4 &&
+                operation != 5 && operation != 6 && operation != 7)
+                throw std::runtime_error("Unsupported 80 group operation");
+            const auto operand = decodeOperand(modrm, extended, rexX, 1);
+            const auto rhs = static_cast<std::uint8_t>(read8());
+            const auto byteReg = [&](std::size_t index) -> std::uint8_t {
+                if (!hasRex && index >= 4 && index <= 7)
+                    return static_cast<std::uint8_t>(registers_[index - 4] >> 8);
+                return static_cast<std::uint8_t>(registers_[index]);
+            };
+            const auto writeByteReg = [&](std::size_t index, std::uint8_t value) {
+                if (!hasRex && index >= 4 && index <= 7) {
+                    const auto parent = index - 4;
+                    registers_[parent] = (registers_[parent] & ~UINT64_C(0xFF00)) |
+                        (static_cast<std::uint64_t>(value) << 8);
+                } else {
+                    registers_[index] = (registers_[index] & ~UINT64_C(0xFF)) | value;
+                }
+            };
+            std::uint8_t lhs = 0;
+            if (operand.isRegister) lhs = byteReg(operand.index);
+            else {
+                if (operand.address >= memory_.size())
+                    throw std::runtime_error("Guest byte ALU read out of bounds");
+                lhs = memory_[static_cast<std::size_t>(operand.address)];
+            }
+            std::uint8_t result = 0;
+            if (operation == 1 || operation == 4 || operation == 6) {
+                result = operation == 1 ? static_cast<std::uint8_t>(lhs | rhs) :
+                    operation == 4 ? static_cast<std::uint8_t>(lhs & rhs) :
+                    static_cast<std::uint8_t>(lhs ^ rhs);
+                carryFlag_ = false;
+                overflowFlag_ = false;
+                zeroFlag_ = result == 0;
+                signFlag_ = (result & 0x80u) != 0;
+                updateParity(result);
+            } else {
+                const bool subtract = operation != 0;
+                result = static_cast<std::uint8_t>(subtract ? lhs - rhs : lhs + rhs);
+                const auto sign = 0x80u;
+                carryFlag_ = subtract ? lhs < rhs : result < lhs;
+                overflowFlag_ = subtract ?
+                    (((lhs ^ rhs) & (lhs ^ result) & sign) != 0) :
+                    (((~(lhs ^ rhs)) & (lhs ^ result) & sign) != 0);
+                zeroFlag_ = result == 0;
+                signFlag_ = (result & sign) != 0;
+                updateParity(result);
+            }
+            if (operation != 7) {
+                if (operand.isRegister) writeByteReg(operand.index, result);
+                else memory_[static_cast<std::size_t>(operand.address)] = result;
+            }
+            continue;
+        }
         // MOV r8,imm8 (B0..B7), with legacy AH/CH/DH/BH versus
         // REX-encoded SPL/BPL/SIL/DIL and R8B..R15B.
         // Operand-size prefix does not change byte-register width.
