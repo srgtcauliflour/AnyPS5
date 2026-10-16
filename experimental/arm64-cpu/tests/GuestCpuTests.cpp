@@ -36,7 +36,7 @@ int main() {
         rejected = true;
     }
     if (!rejected) return EXIT_FAILURE;
-    const std::array<std::uint8_t, 17> branch{
+    const std::array<std::uint8_t, 18> branch{
         0xB8, 0x2A, 0, 0, 0,
         0x3D, 0x2A, 0, 0, 0,
         0x75, 0x05,
