@@ -279,6 +279,50 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             writeOperand(operand, result, wide);
             continue;
         }
+        // Group 2 shifts: C1 r/m,imm8; D1 r/m,1; D3 r/m,CL.
+        // Shift counts are masked to 5 bits for 32-bit and 6 for 64-bit.
+        if (opcode == 0xC1 || opcode == 0xD1 || opcode == 0xD3) {
+            const auto modrm = read8();
+            const auto operation = static_cast<unsigned>((modrm >> 3) & 7);
+            const auto operand = decodeOperand(modrm, extended, rexX);
+            const auto rawCount = opcode == 0xC1 ? static_cast<unsigned>(read8()) :
+                                  opcode == 0xD1 ? 1u :
+                                  static_cast<unsigned>(registers_[1] & 0xFF);
+            if (operation != 4 && operation != 5 && operation != 7)
+                throw std::runtime_error("Unsupported shift operation");
+            const auto bits = wide ? 64u : 32u;
+            const auto count = rawCount & (wide ? 63u : 31u);
+            if (count == 0) continue; // x86 leaves flags and operand unchanged.
+            const auto mask = wide ? UINT64_MAX : static_cast<std::uint64_t>(UINT32_MAX);
+            const auto value = readOperand(operand, wide) & mask;
+            std::uint64_t result = 0;
+            bool newCarry = false;
+            if (operation == 4) { // SHL/SAL
+                result = (value << count) & mask;
+                newCarry = ((value >> (bits - count)) & 1) != 0;
+            } else if (operation == 5) { // SHR
+                result = value >> count;
+                newCarry = ((value >> (count - 1)) & 1) != 0;
+            } else { // SAR: explicit sign fill, without implementation-defined signed shifts.
+                result = value >> count;
+                const bool negative = ((value >> (bits - 1)) & 1) != 0;
+                if (negative) result |= (mask << (bits - count)) & mask;
+                newCarry = ((value >> (count - 1)) & 1) != 0;
+            }
+            result &= mask;
+            carryFlag_ = newCarry;
+            zeroFlag_ = result == 0;
+            signFlag_ = ((result >> (bits - 1)) & 1) != 0;
+            // OF is architecturally defined only for a count of one.
+            // For other counts we retain its prior value.
+            if (count == 1) {
+                if (operation == 4) overflowFlag_ = signFlag_ != carryFlag_;
+                else if (operation == 5) overflowFlag_ = ((value >> (bits - 1)) & 1) != 0;
+                else overflowFlag_ = false;
+            }
+            writeOperand(operand, result, wide);
+            continue;
+        }
         // Group 1 immediate arithmetic: 83 /0 ADD, /5 SUB, /7 CMP.
         // The imm8 is sign-extended to the operand width.
         if (opcode == 0x83) {
