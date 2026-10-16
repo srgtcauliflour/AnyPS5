@@ -726,6 +726,36 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
                 continue;
             }
         }
+        // ROL/ROR: C1 imm8, D1 count=1, D3 count=CL. Rotates update
+        // CF and (only for count=1) OF; ZF/SF/PF remain unchanged.
+        if (opcode == 0xC1 || opcode == 0xD1 || opcode == 0xD3) {
+            if (ip_ >= program_.size())
+                throw std::runtime_error("Truncated rotate ModR/M");
+            const auto operation = static_cast<unsigned>((program_[ip_] >> 3) & 7);
+            if (operation == 0 || operation == 1) {
+                const auto modrm = read8();
+                const auto operand = decodeOperand(modrm, extended, rexX, opcode == 0xC1 ? 1 : 0);
+                const auto rawCount = opcode == 0xC1 ? static_cast<unsigned>(read8()) :
+                    opcode == 0xD1 ? 1u : static_cast<unsigned>(registers_[1] & 0xFF);
+                const auto bits = wide ? 64u : 32u;
+                const auto count = (rawCount & (wide ? 63u : 31u)) % bits;
+                if (count == 0) continue;
+                const auto mask = wide ? UINT64_MAX : static_cast<std::uint64_t>(UINT32_MAX);
+                const auto value = readOperand(operand, wide) & mask;
+                const auto result = operation == 0 ?
+                    ((value << count) | (value >> (bits - count))) & mask :
+                    ((value >> count) | (value << (bits - count))) & mask;
+                carryFlag_ = operation == 0 ? (result & 1u) != 0 :
+                    ((result >> (bits - 1)) & 1u) != 0;
+                if (count == 1) {
+                    const bool msb = ((result >> (bits - 1)) & 1u) != 0;
+                    overflowFlag_ = operation == 0 ? (msb != carryFlag_) :
+                        (msb != (((result >> (bits - 2)) & 1u) != 0));
+                }
+                writeOperand(operand, result, wide);
+                continue;
+            }
+        }
         // Group 2 shifts: C1 r/m,imm8; D1 r/m,1; D3 r/m,CL.
         // Shift counts are masked to 5 bits for 32-bit and 6 for 64-bit.
         if (opcode == 0xC1 || opcode == 0xD1 || opcode == 0xD3) {
