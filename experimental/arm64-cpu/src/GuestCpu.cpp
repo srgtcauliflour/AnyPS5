@@ -264,6 +264,25 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             if (operation != 7) writeOperand(operand, result, wide);
             continue;
         }
+        // F7 /2 NOT and /3 NEG on 32-bit or REX.W 64-bit operands.
+        // NOT leaves flags unchanged; NEG sets CF for every nonzero input.
+        if (opcode == 0xF7) {
+            const auto modrm = read8();
+            const auto operation = static_cast<unsigned>((modrm >> 3) & 7);
+            if (operation != 2 && operation != 3)
+                throw std::runtime_error("Unsupported F7 group operation");
+            const auto operand = decodeOperand(modrm, extended, rexX);
+            const auto mask = wide ? UINT64_MAX : static_cast<std::uint64_t>(UINT32_MAX);
+            const auto value = readOperand(operand, wide) & mask;
+            if (operation == 2) {
+                writeOperand(operand, (~value) & mask, wide);
+            } else {
+                const auto result = (std::uint64_t{0} - value) & mask;
+                updateArithmeticFlags(0, value, result, wide, true);
+                writeOperand(operand, result, wide);
+            }
+            continue;
+        }
         // INC/DEC r/m32 or r/m64 (FF /0 and /1), preserving carry.
         if (opcode == 0xFF) {
             const auto modrm = read8();
