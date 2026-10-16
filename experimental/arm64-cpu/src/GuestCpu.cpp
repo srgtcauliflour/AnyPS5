@@ -153,6 +153,36 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             else registers_[reg] = readOperand(operand, wide);
             continue;
         }
+        // ModR/M arithmetic: 01/03 ADD, 29/2B SUB, 39/3B CMP, 85 TEST.
+        // Operands are 32-bit by default and 64-bit with REX.W.
+        if (opcode == 0x01 || opcode == 0x03 ||
+            opcode == 0x29 || opcode == 0x2B ||
+            opcode == 0x39 || opcode == 0x3B || opcode == 0x85) {
+            const auto modrm = read8();
+            const auto reg = static_cast<std::size_t>(((modrm >> 3) & 7) + (rexR ? 8 : 0));
+            const auto operand = decodeOperand(modrm, extended, rexX);
+            const bool reversed = opcode == 0x03 || opcode == 0x2B || opcode == 0x3B;
+            const auto mask = wide ? UINT64_MAX : static_cast<std::uint64_t>(UINT32_MAX);
+            const auto lhs = (reversed ? registers_[reg] : readOperand(operand, wide)) & mask;
+            const auto rhs = (reversed ? readOperand(operand, wide) : registers_[reg]) & mask;
+            std::uint64_t result = 0;
+            if (opcode == 0x01 || opcode == 0x03) {
+                result = (lhs + rhs) & mask;
+                carryFlag_ = result < lhs;
+            } else if (opcode == 0x85) {
+                result = lhs & rhs;
+                carryFlag_ = false;
+            } else {
+                result = (lhs - rhs) & mask;
+                carryFlag_ = lhs < rhs;
+            }
+            zeroFlag_ = result == 0;
+            if (opcode != 0x39 && opcode != 0x3B && opcode != 0x85) {
+                if (reversed) registers_[reg] = result;
+                else writeOperand(operand, result, wide);
+            }
+            continue;
+        }
         if (opcode == 0xC3) {
             if (wide || extended) throw std::runtime_error("Unsupported RET prefix");
             if (callDepth_ == 0) return registers_[0];
