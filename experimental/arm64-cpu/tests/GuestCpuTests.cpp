@@ -283,5 +283,18 @@ int main() {
         0xB8, 42, 0, 0, 0, 0xC3
     };
     if (GuestCpu(overflowBranch).run() != 42) return EXIT_FAILURE;
+    // REX.W + B8 encodes a full 64-bit immediate (movabs rax, imm64).
+    const std::array<std::uint8_t, 11> movabs{
+        0x48, 0xB8, 0xF0, 0xDE, 0xBC, 0x9A, 0x78, 0x56, 0x34, 0x12, 0xC3
+    };
+    if (GuestCpu(movabs).run() != 0x123456789ABCDEF0ULL) return EXIT_FAILURE;
+
+    // 32-bit register destinations must clear the high 32 bits.
+    const std::array<std::uint8_t, 18> zeroExtend{
+        0x48, 0xB8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xB9, 42, 0, 0, 0,
+        0x8B, 0xC1, 0xC3
+    };
+    if (GuestCpu(zeroExtend).run() != 42) return EXIT_FAILURE;
     return EXIT_SUCCESS;
 }
