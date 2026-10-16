@@ -1293,5 +1293,65 @@ int main() {
         return EXIT_FAILURE;
     }
 
+    // M25: 16-bit MOV preserves the upper bits of register destinations.
+    const auto movWordRegister = std::to_array<std::uint8_t>({
+        0x48, 0xB8, 0x78, 0x56, 0x34, 0x12, 0x00, 0x00, 0x00, 0x00,
+        0xB9, 42, 0, 0, 0,
+        0x66, 0x89, 0xC8, // mov ax,cx
+        0xC3
+    });
+    if (GuestCpu(movWordRegister).run() != UINT64_C(0x1234002A)) {
+        std::fprintf(stderr, "M25 word register write failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto movWordRead = std::to_array<std::uint8_t>({
+        0x48, 0xB8, 42, 0, 0, 0, 1, 0, 0, 0,
+        0x48, 0xB9, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0x66, 0x8B, 0xC8, // mov cx,ax (preserve upper 48 bits)
+        0x48, 0x89, 0xC8, // mov rax,rcx
+        0xC3
+    });
+    if (GuestCpu(movWordRead).run() != UINT64_C(0xFFFFFFFFFFFF002A)) {
+        std::fprintf(stderr, "M25 word register read failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto movWordMemory = std::to_array<std::uint8_t>({
+        0xB8, 42, 0, 0, 0,
+        0x66, 0x89, 0x44, 0x24, 0xFE, // mov [rsp-2],ax
+        0xB8, 0, 0, 0, 0,
+        0x66, 0x8B, 0x44, 0x24, 0xFE, // mov ax,[rsp-2]
+        0xC3
+    });
+    if (GuestCpu(movWordMemory, 64).run() != 42) {
+        std::fprintf(stderr, "M25 word memory roundtrip failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto movWordOutOfBounds = std::to_array<std::uint8_t>({
+        0x66, 0x8B, 0x44, 0x24, 0xFF, 0xC3 // word read at rsp-1
+    });
+    rejected = false;
+    try { GuestCpu(movWordOutOfBounds, 64).run(); }
+    catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) {
+        std::fprintf(stderr, "M25 word memory bounds failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto movWordTruncated = std::to_array<std::uint8_t>({0x66, 0x8B});
+    rejected = false;
+    try { GuestCpu(movWordTruncated).run(); }
+    catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) {
+        std::fprintf(stderr, "M25 truncated word MOV accepted at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto movWordUnsupported = std::to_array<std::uint8_t>({0x66, 0x01, 0xC0, 0xC3});
+    rejected = false;
+    try { GuestCpu(movWordUnsupported).run(); }
+    catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) {
+        std::fprintf(stderr, "M25 unsupported word arithmetic accepted at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
     return EXIT_SUCCESS;
 }
