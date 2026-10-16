@@ -134,6 +134,16 @@ std::uint64_t GuestCpu::pop64() {
     return value;
 }
 
+void GuestCpu::updateParity(std::uint64_t value) {
+    auto low = static_cast<std::uint8_t>(value);
+    bool odd = false;
+    while (low != 0) {
+        odd = !odd;
+        low = static_cast<std::uint8_t>(low & (low - 1));
+    }
+    parityFlag_ = !odd;
+}
+
 void GuestCpu::updateArithmeticFlags(std::uint64_t lhs, std::uint64_t rhs,
                                      std::uint64_t result, bool wide, bool subtraction) {
     const auto mask = wide ? UINT64_MAX : static_cast<std::uint64_t>(UINT32_MAX);
@@ -142,6 +152,7 @@ void GuestCpu::updateArithmeticFlags(std::uint64_t lhs, std::uint64_t rhs,
     rhs &= mask;
     result &= mask;
     zeroFlag_ = result == 0;
+    updateParity(result);
     signFlag_ = (result & sign) != 0;
     if (subtraction) {
         carryFlag_ = lhs < rhs;
@@ -164,6 +175,8 @@ bool GuestCpu::evaluateCondition(std::uint8_t condition) const {
     case 0x7: return !carryFlag_ && !zeroFlag_;
     case 0x8: return signFlag_;
     case 0x9: return !signFlag_;
+    case 0xA: return parityFlag_;
+    case 0xB: return !parityFlag_;
     case 0xC: return signFlag_ != overflowFlag_;
     case 0xD: return signFlag_ == overflowFlag_;
     case 0xE: return zeroFlag_ || (signFlag_ != overflowFlag_);
@@ -181,21 +194,30 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
         bool hasRex = false;
         auto opcode = read8();
         bool operand16 = false;
-        if (opcode == 0x66) {
-            operand16 = true;
+        // Legacy 66 precedes REX in valid long-mode encodings. Repeated
+        // prefixes are accepted; the final adjacent REX controls the width.
+        unsigned prefixCount = 0;
+        while (opcode == 0x66 || (opcode >= 0x40 && opcode <= 0x4F)) {
+            if (++prefixCount >= 15)
+                throw std::runtime_error("Guest instruction prefix exceeds 15 bytes");
+            if (opcode == 0x66) {
+                operand16 = true;
+                hasRex = false; // A legacy prefix cancels an earlier REX.
+                wide = extended = rexR = rexX = false;
+            } else {
+                hasRex = true;
+                wide = (opcode & 8) != 0;
+                extended = (opcode & 1) != 0;
+                rexR = (opcode & 4) != 0;
+                rexX = (opcode & 2) != 0;
+            }
             opcode = read8();
         }
-        if (opcode >= 0x40 && opcode <= 0x4F) {
-            hasRex = true;
-            wide = (opcode & 8) != 0;
-            extended = (opcode & 1) != 0;
-            rexR = (opcode & 4) != 0;
-            rexX = (opcode & 2) != 0;
-            opcode = read8();
-        }
+        // REX.W overrides the 66 operand-size override.
+        if (wide) operand16 = false;
         // Multi-byte alignment NOPs (0F 1F /0) are decoded below.
         // One-byte NOP and CDQE/CWDE are common compiler output.
-        if (opcode == 0x90 && !operand16) continue;
+        if (opcode == 0x90 && !operand16 && !hasRex) continue;
         if (opcode == 0x98 && !operand16) {
             if (wide) {
                 const auto value = static_cast<std::uint32_t>(registers_[0]);
@@ -387,6 +409,7 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
                          (lhs ^ rhs);
                 carryFlag_ = false;
                 overflowFlag_ = false;
+                updateParity(result);
                 signFlag_ = (result & (wide ? (std::uint64_t{1} << 63) : (std::uint64_t{1} << 31))) != 0;
             } else {
                 result = (lhs - rhs) & mask;
@@ -418,6 +441,7 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
                 result = operation == 1 ? (lhs | rhs) :
                          operation == 4 ? (lhs & rhs) : (lhs ^ rhs);
                 zeroFlag_ = result == 0;
+                updateParity(result);
                 signFlag_ = (result & (wide ? (UINT64_C(1) << 63) : (UINT64_C(1) << 31))) != 0;
                 carryFlag_ = false;
                 overflowFlag_ = false;
@@ -521,6 +545,7 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             result &= mask;
             carryFlag_ = newCarry;
             zeroFlag_ = result == 0;
+            updateParity(result);
             signFlag_ = ((result >> (bits - 1)) & 1) != 0;
             // OF is architecturally defined only for a count of one.
             // For other counts we retain its prior value.
@@ -768,6 +793,13 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
         if (opcode >= 0x58 && opcode <= 0x5F) {
             const auto index = static_cast<std::size_t>(opcode - 0x58 + (extended ? 8 : 0));
             registers_[index] = pop64();
+            continue;
+        }
+        if (operand16 && opcode >= 0xB8 && opcode <= 0xBF) {
+            const auto index = static_cast<std::size_t>((opcode - 0xB8) + (extended ? 8 : 0));
+            const auto value = static_cast<std::uint16_t>(read8()) |
+                (static_cast<std::uint16_t>(read8()) << 8);
+            registers_[index] = (registers_[index] & ~UINT64_C(0xFFFF)) | value;
             continue;
         }
         if (opcode >= 0xB8 && opcode <= 0xBF) {
