@@ -1214,5 +1214,84 @@ int main() {
         return EXIT_FAILURE;
     }
 
+    // M24: C7 /0 immediate writes, including REX.W sign extension.
+    const auto movImmediateRegister = std::to_array<std::uint8_t>({
+        0xC7, 0xC0, 42, 0, 0, 0, 0xC3 // mov eax,42
+    });
+    if (GuestCpu(movImmediateRegister).run() != 42) {
+        std::fprintf(stderr, "M24 C7 register failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto movImmediateWideNegative = std::to_array<std::uint8_t>({
+        0x48, 0xC7, 0xC0, 0xD6, 0xFF, 0xFF, 0xFF, 0xC3
+    });
+    if (GuestCpu(movImmediateWideNegative).run() != UINT64_C(0xFFFFFFFFFFFFFFD6)) {
+        std::fprintf(stderr, "M24 C7 wide sign extension failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto movImmediateZeroExtend = std::to_array<std::uint8_t>({
+        0x48, 0xB8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xC7, 0xC0, 42, 0, 0, 0, 0xC3
+    });
+    if (GuestCpu(movImmediateZeroExtend).run() != 42) {
+        std::fprintf(stderr, "M24 C7 32-bit zero extend failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto movImmediateMemory = std::to_array<std::uint8_t>({
+        0xC7, 0x44, 0x24, 0xF8, 42, 0, 0, 0, // mov dword [rsp-8],42
+        0x8B, 0x44, 0x24, 0xF8, 0xC3
+    });
+    if (GuestCpu(movImmediateMemory, 64).run() != 42) {
+        std::fprintf(stderr, "M24 C7 memory failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto movImmediateRip = std::to_array<std::uint8_t>({
+        0xC7, 0x05, 0xF6, 0xFF, 0xFF, 0xFF, 42, 0, 0, 0, 0xC3
+    });
+    GuestCpu movImmediateRipCpu(movImmediateRip, 64);
+    if (movImmediateRipCpu.run() != 0 || movImmediateRipCpu.readMemory32(0) != 42) {
+        std::fprintf(stderr, "M24 C7 RIP-relative failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto movImmediateRexB = std::to_array<std::uint8_t>({
+        0x41, 0xC7, 0xC0, 42, 0, 0, 0, // mov r8d,42
+        0x44, 0x89, 0xC0,             // mov eax,r8d
+        0xC3
+    });
+    if (GuestCpu(movImmediateRexB).run() != 42) {
+        std::fprintf(stderr, "M24 C7 REX.B failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto movImmediateBadGroup = std::to_array<std::uint8_t>({
+        0xC7, 0xC8, 42, 0, 0, 0, 0xC3 // invalid /1
+    });
+    rejected = false;
+    try { GuestCpu(movImmediateBadGroup).run(); }
+    catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) {
+        std::fprintf(stderr, "M24 unsupported C7 accepted at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto movImmediateTruncated = std::to_array<std::uint8_t>({
+        0xC7, 0xC0, 42, 0
+    });
+    rejected = false;
+    try { GuestCpu(movImmediateTruncated).run(); }
+    catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) {
+        std::fprintf(stderr, "M24 truncated C7 accepted at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto movImmediateOutOfBounds = std::to_array<std::uint8_t>({
+        0xC7, 0x44, 0x24, 0, 42, 0, 0, 0, 0xC3
+    });
+    rejected = false;
+    try { GuestCpu(movImmediateOutOfBounds, 64).run(); }
+    catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) {
+        std::fprintf(stderr, "M24 out-of-bounds C7 accepted at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
     return EXIT_SUCCESS;
 }
