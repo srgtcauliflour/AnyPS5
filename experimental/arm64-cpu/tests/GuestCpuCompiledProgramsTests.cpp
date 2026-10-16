@@ -15,6 +15,9 @@ extern "C" unsigned fixture_bitmix(unsigned);
 extern "C" unsigned fixture_popcount(unsigned);
 extern "C" unsigned fixture_factorial(unsigned);
 extern "C" unsigned fixture_fib(unsigned);
+extern "C" unsigned fixture_gcd(unsigned);
+extern "C" unsigned fixture_digit_sum(unsigned);
+extern "C" unsigned fixture_reverse_bits(unsigned);
 
 struct Fixture {
     const char* name;
@@ -32,12 +35,15 @@ static std::vector<std::uint8_t> wrap(std::span<const std::uint8_t> body, unsign
     return code;
 }
 int main() {
-    const std::array<Fixture, 5> fixtures{{
+    const std::array<Fixture, 8> fixtures{{
         {"triangular", stage3_generated::fixture_triangular, fixture_triangular, 128},
         {"bitmix", stage3_generated::fixture_bitmix, fixture_bitmix, 511},
         {"popcount", stage3_generated::fixture_popcount, fixture_popcount, 255},
         {"factorial", stage3_generated::fixture_factorial, fixture_factorial, 12},
-        {"fibonacci", stage3_generated::fixture_fib, fixture_fib, 32}
+        {"fibonacci", stage3_generated::fixture_fib, fixture_fib, 32},
+        {"gcd", stage3_generated::fixture_gcd, fixture_gcd, 255},
+        {"digit_sum", stage3_generated::fixture_digit_sum, fixture_digit_sum, 255},
+        {"reverse_bits", stage3_generated::fixture_reverse_bits, fixture_reverse_bits, 255}
     }};
     unsigned total = 0, passed = 0, unsupported = 0, mismatch = 0, other = 0;
     for (const auto& fixture : fixtures) {
