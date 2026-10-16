@@ -1069,5 +1069,76 @@ int main() {
         return EXIT_FAILURE;
     }
 
+    // M22: CMOVcc compiler-style branchless selection.
+    const auto cmovEqual = std::to_array<std::uint8_t>({
+        0xB8, 7, 0, 0, 0,            // mov eax,7
+        0xB9, 42, 0, 0, 0,           // mov ecx,42
+        0x83, 0xF8, 7,              // cmp eax,7 -> ZF=1
+        0x0F, 0x44, 0xC1,            // cmove eax,ecx
+        0xC3
+    });
+    if (GuestCpu(cmovEqual).run() != 42) {
+        std::fprintf(stderr, "M22 CMOVE true failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto cmovNotEqual = std::to_array<std::uint8_t>({
+        0xB8, 42, 0, 0, 0,
+        0xB9, 99, 0, 0, 0,
+        0x83, 0xF8, 42,             // ZF=1
+        0x0F, 0x45, 0xC1,            // cmovne eax,ecx -> not taken
+        0xC3
+    });
+    if (GuestCpu(cmovNotEqual).run() != 42) {
+        std::fprintf(stderr, "M22 CMOVNE false failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto cmovSigned = std::to_array<std::uint8_t>({
+        0xB8, 0xFF, 0xFF, 0xFF, 0xFF, // mov eax,-1
+        0xB9, 42, 0, 0, 0,
+        0x83, 0xF8, 0,              // cmp eax,0 (SF=1)
+        0x0F, 0x4C, 0xC1,            // cmovl eax,ecx
+        0xC3
+    });
+    if (GuestCpu(cmovSigned).run() != 42) {
+        std::fprintf(stderr, "M22 signed CMOVL failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto cmovWide = std::to_array<std::uint8_t>({
+        0x48, 0xB8, 7, 0, 0, 0, 0, 0, 0, 0,
+        0x48, 0xB9, 42, 0, 0, 0, 1, 0, 0, 0, // rcx=2^32+42
+        0x83, 0xF8, 7,
+        0x48, 0x0F, 0x44, 0xC1,
+        0xC3
+    });
+    if (GuestCpu(cmovWide).run() != ((std::uint64_t{1} << 32) + 42)) {
+        std::fprintf(stderr, "M22 wide CMOV failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto cmovMemory = std::to_array<std::uint8_t>({
+        0xB8, 7, 0, 0, 0,
+        0x83, 0xF8, 7,
+        0x0F, 0x44, 0x44, 0x24, 0xF8, // cmove eax,[rsp-8]
+        0xC3
+    });
+    GuestCpu cmovMemoryCpu(cmovMemory, 64);
+    cmovMemoryCpu.writeMemory32(56, 42);
+    if (cmovMemoryCpu.run() != 42) {
+        std::fprintf(stderr, "M22 memory CMOV failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto cmovFalseInvalidMemory = std::to_array<std::uint8_t>({
+        0xB8, 42, 0, 0, 0,
+        0x83, 0xF8, 42,            // ZF=1; CMOVNE condition false
+        0x0F, 0x45, 0x44, 0x24, 0x00, // cmovne eax,[rsp] -> out of bounds
+        0xC3
+    });
+    rejected = false;
+    try { GuestCpu(cmovFalseInvalidMemory, 64).run(); }
+    catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) {
+        std::fprintf(stderr, "M22 false CMOV memory fault skipped at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
     return EXIT_SUCCESS;
 }
