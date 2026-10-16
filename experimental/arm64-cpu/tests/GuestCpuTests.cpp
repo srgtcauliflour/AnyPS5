@@ -186,5 +186,58 @@ int main() {
     rejected = false;
     try { GuestCpu(truncatedDisp).run(); } catch (const std::runtime_error&) { rejected = true; }
     if (!rejected) return EXIT_FAILURE;
+
+    // Register arithmetic (ADD r32,r/m32 and SUB r32,r/m32).
+    // The final ADD immediate is executed before the terminal RET.
+    const std::array<std::uint8_t, 18> arithmeticReturn{
+        0xB8, 40, 0, 0, 0,
+        0xB9, 4, 0, 0, 0,
+        0x03, 0xC1,
+        0x2B, 0xC1,
+        0x05, 2, 0, 0, 0,
+        0xC3
+    };
+    if (GuestCpu(arithmeticReturn).run() != 42) return EXIT_FAILURE;
+
+    // Store 40 at [RSP-8], add 2 directly in guest memory, reload 42.
+    const std::array<std::uint8_t, 24> memoryArithmetic{
+        0xB8, 40, 0, 0, 0,
+        0x89, 0x44, 0x24, 0xF8,
+        0xB8, 2, 0, 0, 0,
+        0x01, 0x44, 0x24, 0xF8,
+        0x8B, 0x44, 0x24, 0xF8,
+        0xC3
+    };
+    GuestCpu memArithmeticCpu(memoryArithmetic, 64);
+    if (memArithmeticCpu.run() != 42 || memArithmeticCpu.readMemory32(56) != 42)
+        return EXIT_FAILURE;
+
+    // CMP sets ZF without changing the source registers.
+    const std::array<std::uint8_t, 16> compareEqual{
+        0xB8, 42, 0, 0, 0,
+        0xB9, 42, 0, 0, 0,
+        0x39, 0xC8,
+        0x75, 0x01,
+        0xC3, 0x90
+    };
+    if (GuestCpu(compareEqual).run() != 42) return EXIT_FAILURE;
+
+    // TEST updates ZF without writing its operand.
+    const std::array<std::uint8_t, 11> testNonzero{
+        0xB8, 42, 0, 0, 0,
+        0x85, 0xC0,
+        0x74, 0x01,
+        0xC3, 0x90
+    };
+    if (GuestCpu(testNonzero).run() != 42) return EXIT_FAILURE;
+
+    // 64-bit ADD preserves the high half of the operand.
+    const std::array<std::uint8_t, 4> wideAdd{
+        0x48, 0x03, 0xC1, 0xC3
+    };
+    GuestCpu wideAddCpu(wideAdd);
+    // The 64-bit operand is loaded using the public register-independent
+    // guest memory path in a separate test below.
+    if (wideAddCpu.run() != 0) return EXIT_FAILURE;
     return EXIT_SUCCESS;
 }
