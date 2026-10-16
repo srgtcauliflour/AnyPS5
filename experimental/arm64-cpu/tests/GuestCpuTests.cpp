@@ -703,5 +703,62 @@ int main() {
         return EXIT_FAILURE;
     }
 
+    // M14: MOVZX EAX,CX zero-extends the low 16 bits.
+    const auto movzxWordRegister = std::to_array<std::uint8_t>({
+        0xB9, 0xFF, 0xFF, 0x34, 0x12,
+        0x0F, 0xB7, 0xC1,
+        0xC3
+    });
+    if (GuestCpu(movzxWordRegister).run() != 65535) {
+        std::fprintf(stderr, "M14 MOVZX word register failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
+    // MOVSX EAX,CX sign-extends 0x8000 to 0xFFFF8000.
+    const auto movsxWordRegister = std::to_array<std::uint8_t>({
+        0xB9, 0x00, 0x80, 0x34, 0x12,
+        0x0F, 0xBF, 0xC1,
+        0xC3
+    });
+    if (GuestCpu(movsxWordRegister).run() != 0xFFFF8000ULL) {
+        std::fprintf(stderr, "M14 MOVSX word 32-bit destination failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
+    // REX.W sign-extends the same source across all 64 bits.
+    const auto movsxWideWord = std::to_array<std::uint8_t>({
+        0xB9, 0x00, 0x80, 0x34, 0x12,
+        0x48, 0x0F, 0xBF, 0xC1,
+        0xC3
+    });
+    if (GuestCpu(movsxWideWord).run() != 0xFFFFFFFFFFFF8000ULL) {
+        std::fprintf(stderr, "M14 MOVSX word 64-bit destination failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
+    // A word load at the last two bytes of guest memory must succeed.
+    const auto movzxWordMemory = std::to_array<std::uint8_t>({
+        0x0F, 0xB7, 0x44, 0x24, 0xFE,
+        0xC3
+    });
+    GuestCpu movzxWordMemoryCpu(movzxWordMemory, 64);
+    movzxWordMemoryCpu.writeMemory32(60, 0x8001ABCD);
+    if (movzxWordMemoryCpu.run() != 0x8001) {
+        std::fprintf(stderr, "M14 MOVZX word memory failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
+    // Memory reads must reject a 16-bit source crossing the stack boundary.
+    const auto invalidWordMemory = std::to_array<std::uint8_t>({
+        0x0F, 0xB7, 0x44, 0x24, 0xFF
+    });
+    rejected = false;
+    try { GuestCpu(invalidWordMemory, 64).run(); }
+    catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) {
+        std::fprintf(stderr, "M14 out-of-bounds word load accepted at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
     return EXIT_SUCCESS;
 }
