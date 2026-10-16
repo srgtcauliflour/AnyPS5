@@ -11,7 +11,8 @@ import sys
 
 obj, output, nm, objcopy, readelf = sys.argv[1:]
 names = ("fixture_triangular", "fixture_bitmix", "fixture_popcount",
-         "fixture_factorial", "fixture_fib")
+         "fixture_factorial", "fixture_fib", "fixture_gcd",
+         "fixture_digit_sum", "fixture_reverse_bits")
 
 def execute(*args):
     return subprocess.check_output(args, text=True)
