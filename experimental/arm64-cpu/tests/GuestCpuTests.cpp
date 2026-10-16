@@ -760,5 +760,74 @@ int main() {
         return EXIT_FAILURE;
     }
 
+    // M15: left shift and right shift by immediate counts.
+    const auto shiftLeft = std::to_array<std::uint8_t>({
+        0xB8, 21, 0, 0, 0, 0xD1, 0xE0, 0xC3 // shl eax,1 -> 42
+    });
+    if (GuestCpu(shiftLeft).run() != 42) {
+        std::fprintf(stderr, "M15 SHL failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto shiftRight = std::to_array<std::uint8_t>({
+        0xB8, 84, 0, 0, 0, 0xC1, 0xE8, 1, 0xC3 // shr eax,1
+    });
+    if (GuestCpu(shiftRight).run() != 42) {
+        std::fprintf(stderr, "M15 SHR failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    // SAR must preserve the sign bit (0xFFFFFFFC >> 1 = -2).
+    const auto shiftArithmetic = std::to_array<std::uint8_t>({
+        0xB8, 0xFC, 0xFF, 0xFF, 0xFF, 0xD1, 0xF8, 0xC3
+    });
+    if (GuestCpu(shiftArithmetic).run() != 0xFFFFFFFEULL) {
+        std::fprintf(stderr, "M15 SAR sign preservation failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    // D3 reads the shift count from CL.
+    const auto shiftByCl = std::to_array<std::uint8_t>({
+        0xB8, 7, 0, 0, 0,
+        0xB9, 2, 0, 0, 0,
+        0xD3, 0xE0, // shl eax,cl -> 28
+        0x05, 14, 0, 0, 0,
+        0xC3
+    });
+    if (GuestCpu(shiftByCl).run() != 42) {
+        std::fprintf(stderr, "M15 CL shift failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    // REX.W: 64-bit shift with a value above the 32-bit range.
+    const auto wideShift = std::to_array<std::uint8_t>({
+        0xB8, 1, 0, 0, 0,
+        0x48, 0xC1, 0xE0, 0x21, // shl rax,33
+        0xC3
+    });
+    if (GuestCpu(wideShift).run() != (std::uint64_t{1} << 33)) {
+        std::fprintf(stderr, "M15 wide shift failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    // Memory operand: shift the value at [rsp-8] and reload.
+    const auto memoryShift = std::to_array<std::uint8_t>({
+        0xB8, 21, 0, 0, 0,
+        0x89, 0x44, 0x24, 0xF8,
+        0xD1, 0x64, 0x24, 0xF8, // shl dword [rsp-8],1
+        0x8B, 0x44, 0x24, 0xF8,
+        0xC3
+    });
+    GuestCpu memoryShiftCpu(memoryShift, 64);
+    if (memoryShiftCpu.run() != 42 || memoryShiftCpu.readMemory32(56) != 42) {
+        std::fprintf(stderr, "M15 memory shift failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    // A masked shift count of zero must not alter the operand.
+    const auto zeroShift = std::to_array<std::uint8_t>({
+        0xB8, 42, 0, 0, 0,
+        0xC1, 0xE0, 32, // 32-bit count masked to zero
+        0xC3
+    });
+    if (GuestCpu(zeroShift).run() != 42) {
+        std::fprintf(stderr, "M15 zero-count shift failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
     return EXIT_SUCCESS;
 }
