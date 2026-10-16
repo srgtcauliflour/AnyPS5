@@ -36,5 +36,34 @@ int main() {
         rejected = true;
     }
     if (!rejected) return EXIT_FAILURE;
+    const std::array<std::uint8_t, 17> branch{
+        0xB8, 0x2A, 0, 0, 0,
+        0x3D, 0x2A, 0, 0, 0,
+        0x75, 0x05,
+        0xC3,
+        0xB8, 0, 0, 0, 0
+    };
+    if (GuestCpu(branch).run() != 42) return EXIT_FAILURE;
+    const std::array<std::uint8_t, 7> extended{
+        0x41, 0xB8, 0x07, 0, 0, 0, 0xC3
+    };
+    GuestCpu extendedCpu(extended);
+    if (extendedCpu.run() != 0 || extendedCpu.registerValue(8) != 7) return EXIT_FAILURE;
+    const std::array<std::uint8_t, 2> loop{0xEB, 0xFE};
+    rejected = false;
+    try {
+        GuestCpu(loop).run(8);
+    } catch (const std::runtime_error&) {
+        rejected = true;
+    }
+    if (!rejected) return EXIT_FAILURE;
+    const std::array<std::uint8_t, 2> invalidJump{0xEB, 0x7F};
+    rejected = false;
+    try {
+        GuestCpu(invalidJump).run();
+    } catch (const std::runtime_error&) {
+        rejected = true;
+    }
+    if (!rejected) return EXIT_FAILURE;
     return EXIT_SUCCESS;
 }
