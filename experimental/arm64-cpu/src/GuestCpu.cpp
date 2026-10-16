@@ -341,6 +341,40 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             if (operation != 7) writeOperand(operand, result, wide);
             continue;
         }
+        // Three-operand IMUL: 6B uses sign-extended imm8, 69 imm32.
+        // Only CF and OF are defined for IMUL; preserve other flags.
+        if (opcode == 0x6B || opcode == 0x69) {
+            const auto modrm = read8();
+            const auto destination = static_cast<std::size_t>(
+                ((modrm >> 3) & 7) + (rexR ? 8 : 0));
+            const auto source = decodeOperand(modrm, extended, rexX);
+            const auto immediate = opcode == 0x6B
+                ? static_cast<std::int64_t>(static_cast<std::int8_t>(read8()))
+                : static_cast<std::int64_t>(readSigned32());
+            const auto sourceBits = readOperand(source, wide);
+            const auto multiplier = static_cast<std::uint64_t>(immediate);
+            const auto result = sourceBits * multiplier; // defined unsigned wrap
+            registers_[destination] = wide ? result : static_cast<std::uint32_t>(result);
+            if (wide) {
+                const bool sourceNegative = (sourceBits >> 63) != 0;
+                const bool immediateNegative = immediate < 0;
+                const auto sourceMagnitude = sourceNegative
+                    ? std::uint64_t{0} - sourceBits : sourceBits;
+                const auto immediateMagnitude = immediateNegative
+                    ? std::uint64_t{0} - multiplier : multiplier;
+                const auto limit = (sourceNegative != immediateNegative)
+                    ? (std::uint64_t{1} << 63)
+                    : static_cast<std::uint64_t>(INT64_MAX);
+                carryFlag_ = overflowFlag_ = immediateMagnitude != 0 &&
+                    sourceMagnitude > limit / immediateMagnitude;
+            } else {
+                const auto signedSource = static_cast<std::int64_t>(
+                    static_cast<std::int32_t>(sourceBits));
+                const auto product = signedSource * immediate;
+                carryFlag_ = overflowFlag_ = product < INT32_MIN || product > INT32_MAX;
+            }
+            continue;
+        }
         // Two-operand signed IMUL r32/r64, r/m32/r/m64 (0F AF).
         if (opcode == 0x0F) {
             const auto second = read8();
