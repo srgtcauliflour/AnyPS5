@@ -131,6 +131,42 @@ std::uint64_t GuestCpu::pop64() {
     return value;
 }
 
+void GuestCpu::updateArithmeticFlags(std::uint64_t lhs, std::uint64_t rhs,
+                                     std::uint64_t result, bool wide, bool subtraction) {
+    const auto mask = wide ? UINT64_MAX : static_cast<std::uint64_t>(UINT32_MAX);
+    const auto sign = wide ? (std::uint64_t{1} << 63) : (std::uint64_t{1} << 31);
+    lhs &= mask;
+    rhs &= mask;
+    result &= mask;
+    zeroFlag_ = result == 0;
+    signFlag_ = (result & sign) != 0;
+    if (subtraction) {
+        carryFlag_ = lhs < rhs;
+        overflowFlag_ = ((lhs ^ rhs) & (lhs ^ result) & sign) != 0;
+    } else {
+        carryFlag_ = result < lhs;
+        overflowFlag_ = ((~(lhs ^ rhs)) & (lhs ^ result) & sign) != 0;
+    }
+}
+
+bool GuestCpu::evaluateCondition(std::uint8_t condition) const {
+    switch (condition & 0x0F) {
+    case 0x2: return carryFlag_;
+    case 0x3: return !carryFlag_;
+    case 0x4: return zeroFlag_;
+    case 0x5: return !zeroFlag_;
+    case 0x6: return carryFlag_ || zeroFlag_;
+    case 0x7: return !carryFlag_ && !zeroFlag_;
+    case 0x8: return signFlag_;
+    case 0x9: return !signFlag_;
+    case 0xC: return signFlag_ != overflowFlag_;
+    case 0xD: return signFlag_ == overflowFlag_;
+    case 0xE: return zeroFlag_ || (signFlag_ != overflowFlag_);
+    case 0xF: return !zeroFlag_ && (signFlag_ == overflowFlag_);
+    default: throw std::runtime_error("Unsupported condition code");
+    }
+}
+
 std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
     for (std::size_t count = 0; count < maxInstructions; ++count) {
         bool wide = false;
@@ -168,13 +204,15 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             std::uint64_t result = 0;
             if (opcode == 0x01 || opcode == 0x03) {
                 result = (lhs + rhs) & mask;
-                carryFlag_ = result < lhs;
+                updateArithmeticFlags(lhs, rhs, result, wide, false);
             } else if (opcode == 0x85) {
                 result = lhs & rhs;
                 carryFlag_ = false;
+                overflowFlag_ = false;
+                signFlag_ = (result & (wide ? (std::uint64_t{1} << 63) : (std::uint64_t{1} << 31))) != 0;
             } else {
                 result = (lhs - rhs) & mask;
-                carryFlag_ = lhs < rhs;
+                updateArithmeticFlags(lhs, rhs, result, wide, true);
             }
             zeroFlag_ = result == 0;
             if (opcode != 0x39 && opcode != 0x3B && opcode != 0x85) {
@@ -214,14 +252,13 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             const auto result = static_cast<std::uint32_t>(left + right);
             registers_[0] = result;
             zeroFlag_ = result == 0;
-            carryFlag_ = result < left;
+            updateArithmeticFlags(left, right, result, false, false);
             continue;
         }
         if (opcode == 0x3D && !wide && !extended) {
             const auto left = static_cast<std::uint32_t>(registers_[0]);
             const auto right = read32();
-            zeroFlag_ = left == right;
-            carryFlag_ = left < right;
+            updateArithmeticFlags(left, right, static_cast<std::uint32_t>(left - right), false, true);
             continue;
         }
         if (opcode == 0xE8 && !wide && !extended) {
@@ -241,15 +278,18 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             jumpRelative(offset);
             continue;
         }
-        if (opcode == 0x74 && !wide && !extended) {
+        if (opcode >= 0x70 && opcode <= 0x7F) {
             const auto offset = static_cast<std::int8_t>(read8());
-            if (zeroFlag_) jumpRelative(offset);
+            if (evaluateCondition(opcode & 0x0F)) jumpRelative(offset);
             continue;
         }
-        if (opcode == 0x75 && !wide && !extended) {
-            const auto offset = static_cast<std::int8_t>(read8());
-            if (!zeroFlag_) jumpRelative(offset);
-            continue;
+        if (opcode == 0x0F) {
+            const auto second = read8();
+            if (second >= 0x80 && second <= 0x8F) {
+                const auto displacement = readSigned32();
+                if (evaluateCondition(second & 0x0F)) jumpRelative(displacement);
+                continue;
+            }
         }
         throw std::runtime_error("Unsupported guest instruction");
     }
