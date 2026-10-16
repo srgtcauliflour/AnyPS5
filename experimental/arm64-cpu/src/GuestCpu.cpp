@@ -406,16 +406,50 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             const auto operation = static_cast<unsigned>((modrm >> 3) & 7);
             const auto operand = decodeOperand(modrm, extended, rexX, 4);
             const auto immediate = readSigned32();
-            if (operation != 0 && operation != 5 && operation != 7)
+            if (operation != 0 && operation != 1 && operation != 4 &&
+                operation != 5 && operation != 6 && operation != 7)
                 throw std::runtime_error("Unsupported group 1 imm32 operation");
             const auto mask = wide ? UINT64_MAX : static_cast<std::uint64_t>(UINT32_MAX);
             const auto lhs = readOperand(operand, wide) & mask;
             const auto rhs = static_cast<std::uint64_t>(static_cast<std::int64_t>(immediate)) & mask;
-            const bool subtract = operation != 0;
-            const auto result = (subtract ? lhs - rhs : lhs + rhs) & mask;
-            updateArithmeticFlags(lhs, rhs, result, wide, subtract);
+            std::uint64_t result = 0;
+            if (operation == 1 || operation == 4 || operation == 6) {
+                result = operation == 1 ? (lhs | rhs) :
+                         operation == 4 ? (lhs & rhs) : (lhs ^ rhs);
+                zeroFlag_ = result == 0;
+                signFlag_ = (result & (wide ? (UINT64_C(1) << 63) : (UINT64_C(1) << 31))) != 0;
+                carryFlag_ = false;
+                overflowFlag_ = false;
+            } else {
+                const bool subtract = operation != 0;
+                result = (subtract ? lhs - rhs : lhs + rhs) & mask;
+                updateArithmeticFlags(lhs, rhs, result, wide, subtract);
+            }
             if (operation != 7) writeOperand(operand, result, wide);
             continue;
+        }
+        // F7 /0 TEST r/m,imm32 (sign-extended with REX.W).
+        // TEST updates logic flags but never changes the destination.
+        if (opcode == 0xF7) {
+            // Remaining F7 suboperations are handled in the next block.
+            // Decode /0 here without consuming bytes for other operations.
+            if (ip_ >= program_.size())
+                throw std::runtime_error("Truncated F7 ModR/M");
+            const auto group = static_cast<unsigned>((program_[ip_] >> 3) & 7);
+            if (group == 0) {
+                const auto modrm = read8();
+                const auto operand = decodeOperand(modrm, extended, rexX, 4);
+                const auto immediate = readSigned32();
+                const auto mask = wide ? UINT64_MAX : static_cast<std::uint64_t>(UINT32_MAX);
+                const auto value = readOperand(operand, wide) & mask;
+                const auto result = value &
+                    (static_cast<std::uint64_t>(static_cast<std::int64_t>(immediate)) & mask);
+                zeroFlag_ = result == 0;
+                signFlag_ = (result & (wide ? (UINT64_C(1) << 63) : (UINT64_C(1) << 31))) != 0;
+                carryFlag_ = false;
+                overflowFlag_ = false;
+                continue;
+            }
         }
         // F7 /2 NOT and /3 NEG on 32-bit or REX.W 64-bit operands.
         // NOT leaves flags unchanged; NEG sets CF for every nonzero input.
@@ -504,14 +538,25 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             const auto operation = static_cast<unsigned>((modrm >> 3) & 7);
             const auto operand = decodeOperand(modrm, extended, rexX, 1);
             const auto immediate = static_cast<std::int8_t>(read8());
-            if (operation != 0 && operation != 5 && operation != 7)
+            if (operation != 0 && operation != 1 && operation != 4 &&
+                operation != 5 && operation != 6 && operation != 7)
                 throw std::runtime_error("Unsupported group 1 immediate operation");
             const auto mask = wide ? UINT64_MAX : static_cast<std::uint64_t>(UINT32_MAX);
             const auto lhs = readOperand(operand, wide) & mask;
             const auto rhs = static_cast<std::uint64_t>(static_cast<std::int64_t>(immediate)) & mask;
-            const bool subtract = operation != 0;
-            const auto result = (subtract ? lhs - rhs : lhs + rhs) & mask;
-            updateArithmeticFlags(lhs, rhs, result, wide, subtract);
+            std::uint64_t result = 0;
+            if (operation == 1 || operation == 4 || operation == 6) {
+                result = operation == 1 ? (lhs | rhs) :
+                         operation == 4 ? (lhs & rhs) : (lhs ^ rhs);
+                zeroFlag_ = result == 0;
+                signFlag_ = (result & (wide ? (UINT64_C(1) << 63) : (UINT64_C(1) << 31))) != 0;
+                carryFlag_ = false;
+                overflowFlag_ = false;
+            } else {
+                const bool subtract = operation != 0;
+                result = (subtract ? lhs - rhs : lhs + rhs) & mask;
+                updateArithmeticFlags(lhs, rhs, result, wide, subtract);
+            }
             if (operation != 7) writeOperand(operand, result, wide);
             continue;
         }
