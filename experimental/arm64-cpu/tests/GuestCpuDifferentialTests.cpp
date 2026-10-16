@@ -91,6 +91,25 @@ static std::uint64_t guestMultiplyFlags(std::uint64_t input,
     return GuestCpu(code).run();
 }
 
+static bool nativeParity(std::uint32_t value) {
+    unsigned char parity = 0;
+    asm volatile("testl %1, %1; setp %0" : "=qm"(parity) : "r"(value) : "cc");
+    return parity != 0;
+}
+
+static bool guestParity(std::uint32_t value) {
+    std::array<std::uint8_t, 14> code{
+        0xB8, 0, 0, 0, 0,
+        0x85, 0xC0,
+        0x0F, 0x9A, 0xC1,
+        0x0F, 0xB6, 0xC1,
+        0xC3
+    };
+    for (unsigned i = 0; i < 4; ++i)
+        code[1 + i] = static_cast<std::uint8_t>(value >> (i * 8));
+    return GuestCpu(code).run() != 0;
+}
+
 int main() {
     std::uint32_t seed = 0xA17C9E53u;
     constexpr std::array<std::uint32_t, 9> boundaries{
@@ -142,6 +161,10 @@ int main() {
                     static_cast<unsigned long long>(wideActual));
                 return EXIT_FAILURE;
             }
+        }
+        if (nativeParity(value) != guestParity(value)) {
+            std::fprintf(stderr, "Parity mismatch sample=%u value=%08x\\n", sample, value);
+            return EXIT_FAILURE;
         }
         // Differential OF/CF checks on both operand widths. x86 IMUL
         // specifies CF == OF; SETcc exposes them to the guest program.
