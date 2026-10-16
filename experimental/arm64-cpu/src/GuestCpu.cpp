@@ -680,6 +680,45 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
         if (opcode == 0xF7) {
             const auto modrm = read8();
             const auto operation = static_cast<unsigned>((modrm >> 3) & 7);
+            if (operation == 6) {
+                // DIV r/m32 or r/m64: unsigned EDX:EAX / operand.
+                // Quotient overflow and zero divisor raise a guest fault.
+                const auto operand = decodeOperand(modrm, extended, rexX);
+                const auto divisor = readOperand(operand, wide);
+                if (divisor == 0)
+                    throw std::runtime_error("Guest division by zero");
+                if (!wide) {
+                    const auto dividend =
+                        (static_cast<std::uint64_t>(static_cast<std::uint32_t>(registers_[2])) << 32) |
+                        static_cast<std::uint32_t>(registers_[0]);
+                    const auto quotient = dividend / static_cast<std::uint32_t>(divisor);
+                    if (quotient > UINT32_MAX)
+                        throw std::runtime_error("Guest division quotient overflow");
+                    registers_[0] = quotient;
+                    registers_[2] = dividend % static_cast<std::uint32_t>(divisor);
+                } else {
+                    // Avoid non-portable 128-bit arithmetic: a quotient fits
+                    // in 64 bits iff the high dividend limb is below divisor.
+                    const auto high = registers_[2];
+                    const auto low = registers_[0];
+                    if (high >= divisor)
+                        throw std::runtime_error("Guest division quotient overflow");
+                    std::uint64_t quotient = 0;
+                    std::uint64_t remainder = high;
+                    for (int bit = 63; bit >= 0; --bit) {
+                        const bool overflow = (remainder >> 63) != 0;
+                        remainder = (remainder << 1) | ((low >> bit) & 1u);
+                        if (overflow || remainder >= divisor) {
+                            remainder -= divisor;
+                            quotient |= UINT64_C(1) << bit;
+                        }
+                    }
+                    registers_[0] = quotient;
+                    registers_[2] = remainder;
+                }
+                // x86 DIV leaves arithmetic flags undefined.
+                continue;
+            }
             if (operation != 2 && operation != 3)
                 throw std::runtime_error("Unsupported F7 group operation");
             const auto operand = decodeOperand(modrm, extended, rexX);
