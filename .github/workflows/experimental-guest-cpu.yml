@@ -17,9 +17,7 @@ jobs:
         shell: bash
         run: |
           python3 experimental/arm64-cpu/render_progress.py --check || {
-            echo "::error::Progress dashboard is not synchronized; showing exact diff"
-            python3 experimental/arm64-cpu/render_progress.py
-            git diff -- experimental/arm64-cpu/progress.svg
+            echo "::error::Dashboard XML or milestone summary validation failed"
             exit 1
           }
       - name: Configure
