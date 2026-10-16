@@ -877,5 +877,65 @@ int main() {
         return EXIT_FAILURE;
     }
 
+    // M17: three-operand IMUL with signed 8-bit immediate.
+    const auto imulImmediate8 = std::to_array<std::uint8_t>({
+        0xB9, 14, 0, 0, 0,
+        0x6B, 0xC1, 3, // imul eax,ecx,3 -> 42
+        0xC3
+    });
+    if (GuestCpu(imulImmediate8).run() != 42) {
+        std::fprintf(stderr, "M17 IMUL imm8 failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto imulNegative = std::to_array<std::uint8_t>({
+        0xB9, 0xF2, 0xFF, 0xFF, 0xFF, // ecx=-14
+        0x6B, 0xC1, 0xFD,             // imul eax,ecx,-3 -> 42
+        0xC3
+    });
+    if (GuestCpu(imulNegative).run() != 42) {
+        std::fprintf(stderr, "M17 signed IMUL imm8 failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto imulImmediate32 = std::to_array<std::uint8_t>({
+        0xB9, 2, 0, 0, 0,
+        0x69, 0xC1, 21, 0, 0, 0, // imul eax,ecx,21
+        0xC3
+    });
+    if (GuestCpu(imulImmediate32).run() != 42) {
+        std::fprintf(stderr, "M17 IMUL imm32 failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto imulMemory = std::to_array<std::uint8_t>({
+        0xB8, 14, 0, 0, 0,
+        0x89, 0x44, 0x24, 0xF8,
+        0x6B, 0x44, 0x24, 0xF8, 3, // imul eax,[rsp-8],3
+        0xC3
+    });
+    if (GuestCpu(imulMemory, 64).run() != 42) {
+        std::fprintf(stderr, "M17 memory IMUL failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    // 32-bit overflow must set OF, observable through SETO AL.
+    const auto imulOverflow = std::to_array<std::uint8_t>({
+        0xB9, 0, 0, 1, 0,           // mov ecx,65536
+        0x69, 0xC1, 0, 0, 1, 0,     // imul eax,ecx,65536 (overflow)
+        0x0F, 0x90, 0xC0,           // seto al
+        0xC3
+    });
+    if (GuestCpu(imulOverflow).run() != 1) {
+        std::fprintf(stderr, "M17 IMUL overflow flag failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    // REX.W: 64-bit multiplication by a sign-extended imm8.
+    const auto imulWide = std::to_array<std::uint8_t>({
+        0x48, 0xB9, 0, 0, 0, 0, 1, 0, 0, 0, // mov rcx,2^32
+        0x48, 0x6B, 0xC1, 2,              // imul rax,rcx,2
+        0xC3
+    });
+    if (GuestCpu(imulWide).run() != (std::uint64_t{1} << 33)) {
+        std::fprintf(stderr, "M17 wide IMUL failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
     return EXIT_SUCCESS;
 }
