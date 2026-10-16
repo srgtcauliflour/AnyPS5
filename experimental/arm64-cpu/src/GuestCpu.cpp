@@ -181,6 +181,16 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             rexX = (opcode & 2) != 0;
             opcode = read8();
         }
+        // LEA computes the effective address without reading guest memory.
+        if (opcode == 0x8D) {
+            const auto modrm = read8();
+            if ((modrm >> 6) == 3)
+                throw std::runtime_error("LEA requires a memory addressing operand");
+            const auto reg = static_cast<std::size_t>(((modrm >> 3) & 7) + (rexR ? 8 : 0));
+            const auto operand = decodeOperand(modrm, extended, rexX);
+            registers_[reg] = wide ? operand.address : static_cast<std::uint32_t>(operand.address);
+            continue;
+        }
         if (opcode == 0x89 || opcode == 0x8B) {
             const auto modrm = read8();
             const auto reg = static_cast<std::size_t>(((modrm >> 3) & 7) + (rexR ? 8 : 0));
@@ -219,6 +229,14 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
                 if (reversed) registers_[reg] = result;
                 else writeOperand(operand, result, wide);
             }
+            continue;
+        }
+        // Standard compiler-generated function epilogue: mov rsp, rbp; pop rbp.
+        if (opcode == 0xC9) {
+            if (wide || extended || rexR || rexX)
+                throw std::runtime_error("Unsupported LEAVE prefix");
+            registers_[4] = registers_[5];
+            registers_[5] = pop64();
             continue;
         }
         if (opcode == 0xC3) {
