@@ -237,5 +237,51 @@ int main() {
     };
     GuestCpu wideAddCpu(wideAdd);
     if (wideAddCpu.run() != 0) return EXIT_FAILURE;
+
+    // Signed comparison: -1 is less than +1 (JL uses SF != OF).
+    const std::array<std::uint8_t, 21> signedLess{
+        0xB8, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xB9, 1, 0, 0, 0,
+        0x39, 0xC8,
+        0x7C, 0x01,
+        0x90,
+        0xB8, 42, 0, 0, 0, 0xC3
+    };
+    // Branch skips an intentionally unsupported NOP when the condition is true.
+    if (GuestCpu(signedLess).run() != 42) return EXIT_FAILURE;
+
+    // Unsigned 0xFFFFFFFF is above 1 (JA uses !CF && !ZF).
+    const std::array<std::uint8_t, 21> unsignedAbove{
+        0xB8, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xB9, 1, 0, 0, 0,
+        0x39, 0xC8,
+        0x77, 0x01,
+        0x90,
+        0xB8, 42, 0, 0, 0, 0xC3
+    };
+    if (GuestCpu(unsignedAbove).run() != 42) return EXIT_FAILURE;
+
+    // Near conditional branch (0F 8C rel32) skips an invalid opcode.
+    const std::array<std::uint8_t, 25> nearSignedLess{
+        0xB8, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xB9, 1, 0, 0, 0,
+        0x39, 0xC8,
+        0x0F, 0x8C, 1, 0, 0, 0,
+        0x90,
+        0xB8, 42, 0, 0, 0, 0xC3
+    };
+    if (GuestCpu(nearSignedLess).run() != 42) return EXIT_FAILURE;
+
+    // Overflow: 0x7FFFFFFF + 1 becomes negative but signed JG must be false.
+    const std::array<std::uint8_t, 23> overflowBranch{
+        0xB8, 0xFF, 0xFF, 0xFF, 0x7F,
+        0xB9, 1, 0, 0, 0,
+        0x03, 0xC1,
+        0x7F, 0x01,
+        0xEB, 0x01,
+        0x90,
+        0xB8, 42, 0, 0, 0, 0xC3
+    };
+    if (GuestCpu(overflowBranch).run() != 42) return EXIT_FAILURE;
     return EXIT_SUCCESS;
 }
