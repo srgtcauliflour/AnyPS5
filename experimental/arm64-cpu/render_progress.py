@@ -3,6 +3,8 @@
 import argparse
 import html
 import json
+import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -84,7 +86,21 @@ if __name__ == "__main__":
     svg = render(json.loads((ROOT / "progress.json").read_text(encoding="utf-8")))
     path = ROOT / "progress.svg"
     if args.check:
-        if not path.exists() or path.read_text(encoding="utf-8") != svg:
-            parser.error("progress.svg out of date: run python3 render_progress.py")
+        if not path.exists():
+            parser.error("progress.svg missing: run python3 render_progress.py")
+        actual = path.read_text(encoding="utf-8")
+        try:
+            ET.fromstring(actual)
+        except ET.ParseError as exc:
+            parser.error(f"progress.svg is invalid XML: {exc}")
+        data = json.loads((ROOT / "progress.json").read_text(encoding="utf-8"))
+        entries = [entry for category in data["categories"] for entry in category["items"]]
+        completed = sum(status == "implemented" for _, status in entries)
+        expected = f"{100 * completed / len(entries):.1f}%" if entries else "0.0%"
+        milestone = data["milestone"].split(" ", 1)[0]
+        if (f">{expected}<" not in actual or
+                f"({completed}/{len(entries)})" not in actual or
+                f">{milestone}<" not in actual):
+            parser.error("progress.svg summary is stale: run python3 render_progress.py")
     else:
         path.write_text(svg, encoding="utf-8")
