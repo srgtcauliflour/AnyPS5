@@ -663,6 +663,36 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             writeOperand(operand, result, wide);
             continue;
         }
+        // ADC/SBB with a register source or destination (10/11/12/13,
+        // 18/19/1A/1B). Carry-in is captured before flags are updated.
+        // The two-step arithmetic avoids overflow in carry-out detection.
+        if (opcode == 0x11 || opcode == 0x13 ||
+            opcode == 0x19 || opcode == 0x1B) {
+            const auto modrm = read8();
+            const auto reg = static_cast<std::size_t>(((modrm >> 3) & 7) + (rexR ? 8 : 0));
+            const auto operand = decodeOperand(modrm, extended, rexX);
+            const bool reverse = opcode == 0x13 || opcode == 0x1B;
+            const bool subtract = opcode == 0x19 || opcode == 0x1B;
+            const auto mask = wide ? UINT64_MAX : static_cast<std::uint64_t>(UINT32_MAX);
+            const auto sign = wide ? (UINT64_C(1) << 63) : (UINT64_C(1) << 31);
+            const auto lhs = (reverse ? registers_[reg] : readOperand(operand, wide)) & mask;
+            const auto rhs = (reverse ? readOperand(operand, wide) : registers_[reg]) & mask;
+            const auto carryIn = static_cast<std::uint64_t>(carryFlag_);
+            const auto intermediate = subtract ? (lhs - rhs) & mask : (lhs + rhs) & mask;
+            const auto result = subtract ? (intermediate - carryIn) & mask :
+                (intermediate + carryIn) & mask;
+            carryFlag_ = subtract ? (lhs < rhs || (lhs == rhs && carryIn != 0)) :
+                (intermediate < lhs || (carryIn != 0 && intermediate == mask));
+            overflowFlag_ = subtract ?
+                (((lhs ^ rhs) & (lhs ^ result) & sign) != 0) :
+                (((~(lhs ^ rhs)) & (lhs ^ result) & sign) != 0);
+            zeroFlag_ = result == 0;
+            signFlag_ = (result & sign) != 0;
+            updateParity(result);
+            if (reverse) registers_[reg] = result;
+            else writeOperand(operand, result, wide);
+            continue;
+        }
         // Group 2 shifts: C1 r/m,imm8; D1 r/m,1; D3 r/m,CL.
         // Shift counts are masked to 5 bits for 32-bit and 6 for 64-bit.
         if (opcode == 0xC1 || opcode == 0xD1 || opcode == 0xD3) {
