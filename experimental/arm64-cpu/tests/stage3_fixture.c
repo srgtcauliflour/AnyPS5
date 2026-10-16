@@ -50,3 +50,27 @@ __attribute__((noinline)) unsigned fixture_reverse_bits(unsigned n) {
     }
     return result;
 }
+
+/* SysV AMD64: RDI points to a guest array, ESI is the element count.
+ * Both functions operate only on caller-provided memory, with no relocations. */
+__attribute__((noinline)) unsigned fixture_array_sum(const unsigned* a, unsigned n) {
+    unsigned sum = 0;
+    for (unsigned i = 0; i < n; ++i) sum += a[i];
+    return sum;
+}
+__attribute__((noinline)) unsigned fixture_array_sort(unsigned* a, unsigned n) {
+    /* Insertion sort: return the sum after sorting, allowing verification
+     * of both the returned value and all guest-memory mutations. */
+    for (unsigned i = 1; i < n; ++i) {
+        unsigned value = a[i];
+        unsigned j = i;
+        while (j && a[j - 1] > value) {
+            a[j] = a[j - 1];
+            --j;
+        }
+        a[j] = value;
+    }
+    unsigned checksum = 0;
+    for (unsigned i = 0; i < n; ++i) checksum += a[i];
+    return checksum;
+}
