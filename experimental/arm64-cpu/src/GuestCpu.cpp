@@ -267,9 +267,50 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             }
             continue;
         }
+        // MOV r8,imm8 (B0..B7), with legacy AH/CH/DH/BH versus
+        // REX-encoded SPL/BPL/SIL/DIL and R8B..R15B.
+        // Operand-size prefix does not change byte-register width.
+        if (opcode >= 0xB0 && opcode <= 0xB7) {
+            const auto index = static_cast<std::size_t>((opcode - 0xB0) + (extended ? 8 : 0));
+            const auto value = read8();
+            if (!hasRex && index >= 4 && index <= 7) {
+                const auto parent = index - 4;
+                registers_[parent] = (registers_[parent] & ~UINT64_C(0xFF00)) |
+                    (static_cast<std::uint64_t>(value) << 8);
+            } else {
+                registers_[index] = (registers_[index] & ~UINT64_C(0xFF)) | value;
+            }
+            continue;
+        }
+        // TEST r/m8,r8: flag-only bitwise AND. Unlike word/dword
+        // operations, 66 does not change the byte operand size.
+        if (opcode == 0x84) {
+            const auto modrm = read8();
+            const auto reg = static_cast<std::size_t>(((modrm >> 3) & 7) + (rexR ? 8 : 0));
+            const auto operand = decodeOperand(modrm, extended, rexX);
+            const auto byteReg = [&](std::size_t index) -> std::uint8_t {
+                if (!hasRex && index >= 4 && index <= 7)
+                    return static_cast<std::uint8_t>(registers_[index - 4] >> 8);
+                return static_cast<std::uint8_t>(registers_[index]);
+            };
+            std::uint8_t lhs = 0;
+            if (operand.isRegister) lhs = byteReg(operand.index);
+            else {
+                if (operand.address >= memory_.size())
+                    throw std::runtime_error("Guest byte TEST read out of bounds");
+                lhs = memory_[static_cast<std::size_t>(operand.address)];
+            }
+            const auto result = static_cast<std::uint8_t>(lhs & byteReg(reg));
+            zeroFlag_ = result == 0;
+            signFlag_ = (result & 0x80u) != 0;
+            updateParity(result);
+            carryFlag_ = false;
+            overflowFlag_ = false;
+            continue;
+        }
         // Byte MOV (88/8A) and immediate byte MOV (C6 /0).
         // Without REX, byte register codes 4..7 select AH/CH/DH/BH.
-        if (!operand16 && (opcode == 0x88 || opcode == 0x8A || opcode == 0xC6)) {
+        if (opcode == 0x88 || opcode == 0x8A || opcode == 0xC6) {
             const auto modrm = read8();
             const auto group = static_cast<unsigned>((modrm >> 3) & 7);
             if (opcode == 0xC6 && group != 0)
