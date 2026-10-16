@@ -83,16 +83,11 @@ static std::uint64_t guestMultiplyFlags(std::uint64_t input,
         0x0F, 0xB6, 0xD2, // movzx edx,dl
         0x0F, 0xB6, 0xC9, // movzx ecx,cl
         0xD1, 0xE1,       // shl ecx,1
-        0x09, 0xC8,       // or eax,ecx
-        0x09, 0xD0,       // or eax,edx
+        0x31, 0xC0,       // xor eax,eax (clear product)
+        0x09, 0xC8,       // or eax,ecx (CF in bit 1)
+        0x09, 0xD0,       // or eax,edx (OF in bit 0)
         0xC3
     });
-    // The ORs above retain the product's low bits, so instead return
-    // a clean 2-bit flag mask using a separate MOV EAX,0.
-    code.erase(code.end() - 5, code.end() - 1);
-    // At this point the trailing bytes are: SHL ECX,1; RET.
-    // Insert XOR EAX,EAX followed by the two OR operations before RET.
-    code.insert(code.end() - 1, {0x31, 0xC0, 0x09, 0xC8, 0x09, 0xD0});
     return GuestCpu(code).run();
 }
 
