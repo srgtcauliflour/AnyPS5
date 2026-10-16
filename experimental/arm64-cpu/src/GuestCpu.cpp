@@ -222,6 +222,20 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             else registers_[reg] = readOperand(operand, wide);
             continue;
         }
+        // C7 /0: MOV r/m32,imm32 or MOV r/m64,sign-extended imm32.
+        // ModR/M.reg is an opcode extension, not a destination register.
+        if (opcode == 0xC7) {
+            const auto modrm = read8();
+            if (((modrm >> 3) & 7) != 0)
+                throw std::runtime_error("Unsupported C7 group operation");
+            const auto operand = decodeOperand(modrm, extended, rexX, 4);
+            const auto immediate = readSigned32();
+            const auto value = wide
+                ? static_cast<std::uint64_t>(static_cast<std::int64_t>(immediate))
+                : static_cast<std::uint64_t>(static_cast<std::uint32_t>(immediate));
+            writeOperand(operand, value, wide);
+            continue;
+        }
         // ModR/M arithmetic and logic: ADD, OR, AND, SUB, XOR, CMP, TEST.
         // Operands are 32-bit by default and 64-bit with REX.W.
         if (opcode == 0x01 || opcode == 0x03 ||
