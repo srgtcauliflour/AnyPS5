@@ -68,7 +68,7 @@ void GuestCpu::writeMemory32(std::uint64_t address, std::uint32_t value) {
         memory_[static_cast<std::size_t>(address) + i] = static_cast<std::uint8_t>(value >> (i * 8));
 }
 
-GuestCpu::Operand GuestCpu::decodeOperand(std::uint8_t modrm, bool rexB, bool rexX) {
+GuestCpu::Operand GuestCpu::decodeOperand(std::uint8_t modrm, bool rexB, bool rexX, std::size_t trailingImmediateBytes) {
     const auto mod = static_cast<unsigned>(modrm >> 6);
     const auto rm = static_cast<unsigned>(modrm & 7);
     if (mod == 3) return {true, rm + (rexB ? 8u : 0u), 0};
@@ -95,7 +95,7 @@ GuestCpu::Operand GuestCpu::decodeOperand(std::uint8_t modrm, bool rexB, bool re
     std::int64_t displacement = 0;
     if (mod == 1) displacement = static_cast<std::int8_t>(read8());
     if (mod == 2 || (mod == 0 && !hasBase)) displacement = readSigned32();
-    if (ripRelative) base = ip_;
+    // RIP-relative addresses use the end of the *entire* instruction,\n    // including any immediate following ModR/M displacement bytes.\n    if (ripRelative) base = static_cast<std::uint64_t>(ip_) + trailingImmediateBytes;
     return {false, 0, base + index * scale + static_cast<std::uint64_t>(displacement)};
 }
 
@@ -249,7 +249,7 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
         if (opcode == 0x81) {
             const auto modrm = read8();
             const auto operation = static_cast<unsigned>((modrm >> 3) & 7);
-            const auto operand = decodeOperand(modrm, extended, rexX);
+            const auto operand = decodeOperand(modrm, extended, rexX, 4);
             const auto immediate = readSigned32();
             if (operation != 0 && operation != 5 && operation != 7)
                 throw std::runtime_error("Unsupported group 1 imm32 operation");
@@ -284,7 +284,7 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
         if (opcode == 0xC1 || opcode == 0xD1 || opcode == 0xD3) {
             const auto modrm = read8();
             const auto operation = static_cast<unsigned>((modrm >> 3) & 7);
-            const auto operand = decodeOperand(modrm, extended, rexX);
+            const auto operand = decodeOperand(modrm, extended, rexX, opcode == 0xC1 ? 1 : 0);
             const auto rawCount = opcode == 0xC1 ? static_cast<unsigned>(read8()) :
                                   opcode == 0xD1 ? 1u :
                                   static_cast<unsigned>(registers_[1] & 0xFF);
@@ -328,7 +328,7 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
         if (opcode == 0x83) {
             const auto modrm = read8();
             const auto operation = static_cast<unsigned>((modrm >> 3) & 7);
-            const auto operand = decodeOperand(modrm, extended, rexX);
+            const auto operand = decodeOperand(modrm, extended, rexX, 1);
             const auto immediate = static_cast<std::int8_t>(read8());
             if (operation != 0 && operation != 5 && operation != 7)
                 throw std::runtime_error("Unsupported group 1 immediate operation");
@@ -347,7 +347,7 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             const auto modrm = read8();
             const auto destination = static_cast<std::size_t>(
                 ((modrm >> 3) & 7) + (rexR ? 8 : 0));
-            const auto source = decodeOperand(modrm, extended, rexX);
+            const auto source = decodeOperand(modrm, extended, rexX, opcode == 0x6B ? 1 : 4);
             const auto immediate = opcode == 0x6B
                 ? static_cast<std::int64_t>(static_cast<std::int8_t>(read8()))
                 : static_cast<std::int64_t>(readSigned32());
