@@ -187,6 +187,23 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             rexX = (opcode & 2) != 0;
             opcode = read8();
         }
+        // MOVSXD r64,r/m32 (REX.W + 63 /r).
+        // Without REX.W, opcode 63 is deliberately unsupported here:
+        // the legacy-width form has different destination semantics.
+        if (opcode == 0x63) {
+            if (!wide)
+                throw std::runtime_error("MOVSXD requires REX.W");
+            const auto modrm = read8();
+            const auto destination = static_cast<std::size_t>(
+                ((modrm >> 3) & 7) + (rexR ? 8 : 0));
+            const auto operand = decodeOperand(modrm, extended, rexX);
+            const auto value = static_cast<std::uint32_t>(readOperand(operand, false));
+            const auto extendedValue = value & 0x80000000u
+                ? static_cast<std::uint64_t>(value) | UINT64_C(0xFFFFFFFF00000000)
+                : static_cast<std::uint64_t>(value);
+            registers_[destination] = extendedValue;
+            continue;
+        }
         // LEA computes the effective address without reading guest memory.
         if (opcode == 0x8D) {
             const auto modrm = read8();
