@@ -1353,5 +1353,73 @@ int main() {
         return EXIT_FAILURE;
     }
 
+    // M26: 66 C7 /0 writes exactly 16 bits from an imm16.
+    const auto wordImmediateRegister = std::to_array<std::uint8_t>({
+        0x48, 0xB8, 0x78, 0x56, 0x34, 0x12, 0, 0, 0, 0,
+        0x66, 0xC7, 0xC0, 42, 0, // mov ax,42
+        0xC3
+    });
+    if (GuestCpu(wordImmediateRegister).run() != UINT64_C(0x1234002A)) {
+        std::fprintf(stderr, "M26 word immediate register failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto wordImmediateMemory = std::to_array<std::uint8_t>({
+        0x66, 0xC7, 0x44, 0x24, 0xFE, 42, 0,
+        0x66, 0x8B, 0x44, 0x24, 0xFE,
+        0xC3
+    });
+    if (GuestCpu(wordImmediateMemory, 64).run() != 42) {
+        std::fprintf(stderr, "M26 word immediate memory failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto wordImmediateRip = std::to_array<std::uint8_t>({
+        0x66, 0xC7, 0x05, 0xF7, 0xFF, 0xFF, 0xFF, 42, 0, 0xC3
+    });
+    GuestCpu wordImmediateRipCpu(wordImmediateRip, 64);
+    if (wordImmediateRipCpu.run() != 0 ||
+        (wordImmediateRipCpu.readMemory32(0) & 0xFFFFu) != 42) {
+        std::fprintf(stderr, "M26 word immediate RIP failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto wordImmediateRexB = std::to_array<std::uint8_t>({
+        0x66, 0x41, 0xC7, 0xC0, 42, 0, // mov r8w,42
+        0x66, 0x44, 0x89, 0xC0,        // mov ax,r8w
+        0xC3
+    });
+    if (GuestCpu(wordImmediateRexB).run() != 42) {
+        std::fprintf(stderr, "M26 word immediate REX.B failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto wordImmediateBadGroup = std::to_array<std::uint8_t>({
+        0x66, 0xC7, 0xC8, 42, 0, 0xC3
+    });
+    rejected = false;
+    try { GuestCpu(wordImmediateBadGroup).run(); }
+    catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) {
+        std::fprintf(stderr, "M26 invalid word immediate group accepted at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto wordImmediateTruncated = std::to_array<std::uint8_t>({
+        0x66, 0xC7, 0xC0, 42
+    });
+    rejected = false;
+    try { GuestCpu(wordImmediateTruncated).run(); }
+    catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) {
+        std::fprintf(stderr, "M26 truncated word immediate accepted at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto wordImmediateOutOfBounds = std::to_array<std::uint8_t>({
+        0x66, 0xC7, 0x44, 0x24, 0xFF, 42, 0, 0xC3
+    });
+    rejected = false;
+    try { GuestCpu(wordImmediateOutOfBounds, 64).run(); }
+    catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) {
+        std::fprintf(stderr, "M26 out-of-bounds word write accepted at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
     return EXIT_SUCCESS;
 }
