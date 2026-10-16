@@ -558,5 +558,72 @@ int main() {
         return EXIT_FAILURE;
     }
 
+    // M12: signed SETL from -1 < 1, writing only AL.
+    const auto setSignedLess = std::to_array<std::uint8_t>({
+        0xB8, 0xFF, 0xFF, 0xFF, 0xFF, // mov eax,-1
+        0xB9, 1, 0, 0, 0,             // mov ecx,1
+        0x39, 0xC8,                   // cmp eax,ecx
+        0x0F, 0x9C, 0xC0,             // setl al
+        0xC3
+    });
+    GuestCpu setSignedCpu(setSignedLess);
+    if (setSignedCpu.run() != 0xFFFFFF01ULL) {
+        std::fprintf(stderr, "M12 signed SETcc or byte preservation failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
+    // Unsigned SETA should be true for 0xFFFFFFFF > 1.
+    const auto setUnsignedAbove = std::to_array<std::uint8_t>({
+        0xB8, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xB9, 1, 0, 0, 0,
+        0x39, 0xC8,
+        0x0F, 0x97, 0xC0, // seta al
+        0xC3
+    });
+    if (GuestCpu(setUnsignedAbove).run() != 0xFFFFFF01ULL) {
+        std::fprintf(stderr, "M12 unsigned SETcc failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
+    // Legacy AH encoding must update bits 8..15 without corrupting AL.
+    const auto setHighByte = std::to_array<std::uint8_t>({
+        0xB8, 0x78, 0x56, 0x34, 0x12,
+        0x39, 0xC0,             // cmp eax,eax (ZF=1)
+        0x0F, 0x94, 0xC4,       // sete ah
+        0xC3
+    });
+    if (GuestCpu(setHighByte).run() != 0x12340178ULL) {
+        std::fprintf(stderr, "M12 legacy high-byte SETcc failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
+    // REX.B maps the low-byte destination to R8B.
+    const auto setR8Byte = std::to_array<std::uint8_t>({
+        0x41, 0xB8, 0x78, 0x56, 0x34, 0x12,
+        0x39, 0xC0,             // cmp eax,eax
+        0x41, 0x0F, 0x94, 0xC0, // sete r8b
+        0xC3
+    });
+    GuestCpu setR8Cpu(setR8Byte);
+    if (setR8Cpu.run() != 0 || setR8Cpu.registerValue(8) != 0x12345601ULL) {
+        std::fprintf(stderr, "M12 REX extended byte register failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
+    // SETE [rsp-8] must change only the addressed byte.
+    const auto setMemoryByte = std::to_array<std::uint8_t>({
+        0xB8, 0x78, 0x56, 0x34, 0x12,
+        0x89, 0x44, 0x24, 0xF8, // mov [rsp-8],eax
+        0x39, 0xC0,             // cmp eax,eax
+        0x0F, 0x94, 0x44, 0x24, 0xF8, // sete byte [rsp-8]
+        0xC3
+    });
+    GuestCpu setMemoryCpu(setMemoryByte, 64);
+    if (setMemoryCpu.run() != 0x12345678ULL ||
+        setMemoryCpu.readMemory32(56) != 0x12345601U) {
+        std::fprintf(stderr, "M12 memory SETcc byte write failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
     return EXIT_SUCCESS;
 }
