@@ -110,6 +110,25 @@ static bool guestParity(std::uint32_t value) {
     return GuestCpu(code).run() != 0;
 }
 
+static bool nativeParity64(std::uint64_t value) {
+    unsigned char parity = 0;
+    asm volatile("testq %1, %1; setp %0" : "=qm"(parity) : "r"(value) : "cc");
+    return parity != 0;
+}
+
+static bool guestParity64(std::uint64_t value) {
+    std::array<std::uint8_t, 21> code{
+        0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0,
+        0x48, 0x85, 0xC0,
+        0x0F, 0x9A, 0xC1,
+        0x0F, 0xB6, 0xC1,
+        0xC3, 0x90
+    };
+    for (unsigned i = 0; i < 8; ++i)
+        code[2 + i] = static_cast<std::uint8_t>(value >> (i * 8));
+    return GuestCpu(code).run() != 0;
+}
+
 int main() {
     std::uint32_t seed = 0xA17C9E53u;
     constexpr std::array<std::uint32_t, 9> boundaries{
@@ -164,6 +183,12 @@ int main() {
         }
         if (nativeParity(value) != guestParity(value)) {
             std::fprintf(stderr, "Parity mismatch sample=%u value=%08x\\n", sample, value);
+            return EXIT_FAILURE;
+        }
+        const std::uint64_t parityWideValue =
+            (static_cast<std::uint64_t>(value) << 32) | (~value);
+        if (nativeParity64(parityWideValue) != guestParity64(parityWideValue)) {
+            std::fprintf(stderr, "Wide parity mismatch sample=%u\\n", sample);
             return EXIT_FAILURE;
         }
         // Differential OF/CF checks on both operand widths. x86 IMUL
