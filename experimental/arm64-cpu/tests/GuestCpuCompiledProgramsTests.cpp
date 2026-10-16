@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <exception>
 #include <span>
+#include <string>
 #include <vector>
 
 using anyps5::experimental::GuestCpu;
