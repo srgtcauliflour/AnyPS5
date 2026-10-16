@@ -399,6 +399,19 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
         // Two-operand signed IMUL r32/r64, r/m32/r/m64 (0F AF).
         if (opcode == 0x0F) {
             const auto second = read8();
+            // CMOVcc r32/r64,r/m32/r/m64 (0F 40..4F).
+            // x86 reads the source even when the condition is false;
+            // memory faults therefore cannot be skipped by a false CMOV.
+            if (second >= 0x40 && second <= 0x4F) {
+                const auto modrm = read8();
+                const auto destination = static_cast<std::size_t>(
+                    ((modrm >> 3) & 7) + (rexR ? 8 : 0));
+                const auto operand = decodeOperand(modrm, extended, rexX);
+                const auto source = readOperand(operand, wide);
+                if (evaluateCondition(static_cast<std::uint8_t>(second & 0x0F)))
+                    registers_[destination] = source;
+                continue;
+            }
             // MOVZX/MOVSX r32/r64, r/m8 (0F B6 / 0F BE).
             // Byte register encodings 4..7 refer to AH/CH/DH/BH only
             // when there is no REX prefix. With REX they mean SPL..DIL.
