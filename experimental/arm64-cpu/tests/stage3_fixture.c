@@ -83,3 +83,11 @@ __attribute__((noinline)) unsigned fixture_recursive_factorial(
     if (n <= 1u) return 1u;
     return n * recurse(n - 1u);
 }
+
+/* Cross-function execution through an ABI-compatible guest callback pointer.
+ * The callback is a separately compiled function placed in the same guest
+ * code image by the test runner; neither function contains relocations. */
+__attribute__((noinline)) unsigned fixture_callback_twice(
+    unsigned n, unsigned (*transform)(unsigned)) {
+    return transform(n) + transform(n + 1u);
+}
