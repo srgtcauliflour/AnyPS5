@@ -175,8 +175,10 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
         bool extended = false;
         bool rexR = false;
         bool rexX = false;
+        bool hasRex = false;
         auto opcode = read8();
         if (opcode >= 0x40 && opcode <= 0x4F) {
+            hasRex = true;
             wide = (opcode & 8) != 0;
             extended = (opcode & 1) != 0;
             rexR = (opcode & 4) != 0;
@@ -298,6 +300,30 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
         // Two-operand signed IMUL r32/r64, r/m32/r/m64 (0F AF).
         if (opcode == 0x0F) {
             const auto second = read8();
+            // SETcc r/m8 (0F 90..9F). Unlike the existing operands,
+            // SETcc writes only one byte, preserving all other register bits.
+            if (second >= 0x90 && second <= 0x9F) {
+                const auto modrm = read8();
+                const auto operand = decodeOperand(modrm, extended, rexX);
+                const auto value = static_cast<std::uint8_t>(
+                    evaluateCondition(static_cast<std::uint8_t>(second & 0x0F)) ? 1 : 0);
+                if (operand.isRegister) {
+                    const auto reg = operand.index;
+                    if (!hasRex && reg >= 4 && reg <= 7) {
+                        // AH, CH, DH, BH without a REX prefix.
+                        const auto parent = reg - 4;
+                        registers_[parent] = (registers_[parent] & ~std::uint64_t{0xFF00}) |
+                                             (std::uint64_t{value} << 8);
+                    } else {
+                        registers_[reg] = (registers_[reg] & ~std::uint64_t{0xFF}) | value;
+                    }
+                } else {
+                    if (operand.address >= memory_.size())
+                        throw std::runtime_error("Guest byte write out of bounds");
+                    memory_[static_cast<std::size_t>(operand.address)] = value;
+                }
+                continue;
+            }
             if (second == 0xAF) {
                 const auto modrm = read8();
                 const auto reg = static_cast<std::size_t>(((modrm >> 3) & 7) + (rexR ? 8 : 0));
