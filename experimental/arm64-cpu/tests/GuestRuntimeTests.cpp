@@ -56,8 +56,12 @@ checked_guard:
     bad[8] = 255; // code size larger than payload
     if (!rejects(bad)) return EXIT_FAILURE;
     bad = valid;
-    bad[16] = 1; // unsupported nonzero entry
+    bad[16] = 255; // out-of-range entry
     if (!rejects(bad)) return EXIT_FAILURE;
+    // Entry may select a later function in the code image.
+    bad = image({0xB8,0x01,0,0,0,0xC3,0xB8,0x2A,0,0,0,0xC3}, {0,0,0,0});
+    bad[16] = 6;
+    if (GuestRuntime::load(bad).run() != 42) return EXIT_FAILURE;
     bad = valid;
     bad.pop_back(); // truncated initialized data
     if (!rejects(bad)) return EXIT_FAILURE;
