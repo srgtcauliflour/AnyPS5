@@ -300,6 +300,38 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
         // Two-operand signed IMUL r32/r64, r/m32/r/m64 (0F AF).
         if (opcode == 0x0F) {
             const auto second = read8();
+            // MOVZX/MOVSX r32/r64, r/m8 (0F B6 / 0F BE).
+            // Byte register encodings 4..7 refer to AH/CH/DH/BH only
+            // when there is no REX prefix. With REX they mean SPL..DIL.
+            if (second == 0xB6 || second == 0xBE) {
+                const auto modrm = read8();
+                const auto destination = static_cast<std::size_t>(
+                    ((modrm >> 3) & 7) + (rexR ? 8 : 0));
+                const auto operand = decodeOperand(modrm, extended, rexX);
+                std::uint8_t byteValue = 0;
+                if (operand.isRegister) {
+                    if (!hasRex && operand.index >= 4 && operand.index <= 7)
+                        byteValue = static_cast<std::uint8_t>(
+                            registers_[operand.index - 4] >> 8);
+                    else
+                        byteValue = static_cast<std::uint8_t>(registers_[operand.index]);
+                } else {
+                    if (operand.address >= memory_.size())
+                        throw std::runtime_error("Guest byte read out of bounds");
+                    byteValue = memory_[static_cast<std::size_t>(operand.address)];
+                }
+                if (second == 0xB6) {
+                    registers_[destination] = byteValue;
+                } else {
+                    const auto signedValue = byteValue < 0x80
+                        ? static_cast<std::int64_t>(byteValue)
+                        : static_cast<std::int64_t>(byteValue) - 256;
+                    registers_[destination] = wide
+                        ? static_cast<std::uint64_t>(signedValue)
+                        : static_cast<std::uint32_t>(signedValue);
+                }
+                continue;
+            }
             // SETcc r/m8 (0F 90..9F). Unlike the existing operands,
             // SETcc writes only one byte, preserving all other register bits.
             if (second >= 0x90 && second <= 0x9F) {
