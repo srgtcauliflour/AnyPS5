@@ -693,6 +693,39 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             else writeOperand(operand, result, wide);
             continue;
         }
+        // ADC/SBB immediate group 1 extensions: 81/83 /2 and /3.
+        // 81 sign-extends imm32 for 64-bit operands; 83 sign-extends imm8.
+        if (opcode == 0x81 || opcode == 0x83) {
+            if (ip_ >= program_.size())
+                throw std::runtime_error("Truncated arithmetic ModR/M");
+            const auto operation = static_cast<unsigned>((program_[ip_] >> 3) & 7);
+            if (operation == 2 || operation == 3) {
+                const auto modrm = read8();
+                const bool imm32 = opcode == 0x81;
+                const auto operand = decodeOperand(modrm, extended, rexX, imm32 ? 4 : 1);
+                const auto immediate = imm32 ? static_cast<std::int64_t>(readSigned32()) :
+                    static_cast<std::int64_t>(static_cast<std::int8_t>(read8()));
+                const auto mask = wide ? UINT64_MAX : static_cast<std::uint64_t>(UINT32_MAX);
+                const auto sign = wide ? (UINT64_C(1) << 63) : (UINT64_C(1) << 31);
+                const auto lhs = readOperand(operand, wide) & mask;
+                const auto rhs = static_cast<std::uint64_t>(immediate) & mask;
+                const auto carryIn = static_cast<std::uint64_t>(carryFlag_);
+                const bool subtract = operation == 3;
+                const auto intermediate = subtract ? (lhs - rhs) & mask : (lhs + rhs) & mask;
+                const auto result = subtract ? (intermediate - carryIn) & mask :
+                    (intermediate + carryIn) & mask;
+                carryFlag_ = subtract ? (lhs < rhs || (lhs == rhs && carryIn != 0)) :
+                    (intermediate < lhs || (carryIn != 0 && intermediate == mask));
+                overflowFlag_ = subtract ?
+                    (((lhs ^ rhs) & (lhs ^ result) & sign) != 0) :
+                    (((~(lhs ^ rhs)) & (lhs ^ result) & sign) != 0);
+                zeroFlag_ = result == 0;
+                signFlag_ = (result & sign) != 0;
+                updateParity(result);
+                writeOperand(operand, result, wide);
+                continue;
+            }
+        }
         // Group 2 shifts: C1 r/m,imm8; D1 r/m,1; D3 r/m,CL.
         // Shift counts are masked to 5 bits for 32-bit and 6 for 64-bit.
         if (opcode == 0xC1 || opcode == 0xD1 || opcode == 0xD3) {
