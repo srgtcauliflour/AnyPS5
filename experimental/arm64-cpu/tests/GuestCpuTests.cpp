@@ -357,5 +357,29 @@ int main() {
         return EXIT_FAILURE;
     }
 
+    // Immediate ADD/SUB/CMP, including negative sign-extended imm8.
+    const std::array<std::uint8_t, 18> immediateArithmetic{
+        0xB8, 40, 0, 0, 0,
+        0x83, 0xC0, 0x05,       // add eax,5
+        0x83, 0xE8, 0x03,       // sub eax,3
+        0x83, 0xF8, 42,         // cmp eax,42
+        0x75, 0x01,             // jne invalid opcode
+        0xC3, 0x90
+    };
+    if (GuestCpu(immediateArithmetic).run() != 42) {
+        std::fprintf(stderr, "Immediate arithmetic failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    // Signed IMUL: -7 * -6 = 42, 32-bit result zero-extended.
+    const std::array<std::uint8_t, 15> signedMultiply{
+        0xB8, 0xF9, 0xFF, 0xFF, 0xFF,
+        0xB9, 0xFA, 0xFF, 0xFF, 0xFF,
+        0x0F, 0xAF, 0xC1,
+        0xC3, 0x90
+    };
+    if (GuestCpu(signedMultiply).run() != 42) {
+        std::fprintf(stderr, "Signed multiplication failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
     return EXIT_SUCCESS;
 }
