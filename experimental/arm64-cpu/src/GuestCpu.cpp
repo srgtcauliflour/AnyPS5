@@ -252,6 +252,29 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             else registers_[reg] = (registers_[reg] & ~UINT64_C(0xFFFF)) | readWord();
             continue;
         }
+        // 66 C7 /0: MOV r/m16,imm16. The immediate is two bytes,
+        // including when the destination uses RIP-relative addressing.
+        if (operand16 && opcode == 0xC7) {
+            const auto modrm = read8();
+            if (((modrm >> 3) & 7) != 0)
+                throw std::runtime_error("Unsupported 16-bit C7 group operation");
+            const auto operand = decodeOperand(modrm, extended, rexX, 2);
+            const auto low = static_cast<std::uint16_t>(read8());
+            const auto high = static_cast<std::uint16_t>(read8());
+            const auto value = static_cast<std::uint16_t>(low | (high << 8));
+            if (operand.isRegister) {
+                registers_[operand.index] =
+                    (registers_[operand.index] & ~UINT64_C(0xFFFF)) | value;
+            } else {
+                if (operand.address > memory_.size() ||
+                    memory_.size() - static_cast<std::size_t>(operand.address) < 2)
+                    throw std::runtime_error("Guest word write out of bounds");
+                const auto address = static_cast<std::size_t>(operand.address);
+                memory_[address] = static_cast<std::uint8_t>(value);
+                memory_[address + 1] = static_cast<std::uint8_t>(value >> 8);
+            }
+            continue;
+        }
         if (operand16)
             throw std::runtime_error("Unsupported 16-bit operand-size instruction");
         if (opcode == 0x89 || opcode == 0x8B) {
