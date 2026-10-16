@@ -3,7 +3,7 @@
 ## Scope and limitations
 
 This is an experimental **x86-64 instruction interpreter**, not a PS5 emulator.
-The first Stage 3 baseline uses ten C functions, each accepting a single
+The first Stage 3 baseline uses eleven C functions, each accepting a single
 unsigned 32-bit SysV AMD64 argument in EDI and returning EAX. The runner
 prepends `mov edi, imm32` and executes the compiler's real function bytes.
 No guest OS, loader, external symbols, guest heap, or general ABI is provided.
@@ -37,18 +37,20 @@ portable C++ tests, and iOS ARM64 remains compile-only.
 | 32-bit bit reversal | 0–255 | 256 |
 | array sum | lengths 0–32 | 33 |
 | insertion sort | lengths 0–32 | 33 |
-| **Total** | | **1,777** |
+| recursive factorial (indirect callback) | 0–12 | 13 |
+| **Total** | | **1,790** |
 
 The CTest executable prints per-function pass counts and a total
-`STAGE3 COMPATIBILITY passed/1777` line. A mismatch or execution exception
+`STAGE3 COMPATIBILITY passed/1790` line. A mismatch or execution exception
 causes CI failure; failures are not counted as passes. The denominator
 represents **only this deliberately limited corpus**, not compatibility
 with arbitrary x86-64 software or PS5 games.
 
 ## Known gaps and next work
 
-- Real recursion and multi-function calls, external relocations and ABI stack
-  arguments need Phase 4 loader/ABI work.
+- Recursive calls through a guest callback trampoline are covered; general
+  multi-function linking, external relocations and ABI stack arguments still
+  need Phase 4 loader/ABI work.
 - Pointer and array inputs are now covered by a bounded 4096-address guest-memory fixture; broader memory/ABI coverage remains incomplete.
 - Insertion sorting is covered for lengths 0–32; larger and randomized arrays remain untested.
 - The generator requires Linux ELF and Clang 17; other compilers are not
@@ -57,7 +59,7 @@ with arbitrary x86-64 software or PS5 games.
 
 ## Expansion checkpoint
 
-The ten-function corpus exercises compiler-emitted integer division in
+The eleven-function corpus exercises compiler-emitted integer division in
 addition to arithmetic, branching, shifts and multiplication. The interpreter
 now includes unsigned F7 /6 DIV (32/64-bit), with dedicated quotient/remainder
 regression tests. Treat the expanded compatibility percentage as **pending**
@@ -70,3 +72,13 @@ initializes guest words with `writeMemory32`, executes compiler-extracted
 array sum/insertion sort, and compares both EAX and every resulting array
 word with a native reference. The 66 new cases are included in the
 1,777-case denominator. This expanded total is pending a green CI run.
+
+## Recursive call expansion
+
+The compiled recursive factorial accepts EDI=n and RSI=callback. The native
+reference supplies a native recursive callback; the guest runner supplies a
+bounded-code trampoline that resets RSI to its own guest address and jumps to
+the same compiler-extracted function. This exercises indirect CALL, nested
+stack frames and RET without pretending that a general ELF loader exists.
+The 13 added cases raise the published corpus to 1,790. CI validation of
+this expansion is required before claiming all 1,790 pass.
