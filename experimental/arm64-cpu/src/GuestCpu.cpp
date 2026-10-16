@@ -192,6 +192,65 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             rexX = (opcode & 2) != 0;
             opcode = read8();
         }
+        // Multi-byte alignment NOPs (0F 1F /0) are decoded below.
+        // One-byte NOP and CDQE/CWDE are common compiler output.
+        if (opcode == 0x90 && !operand16) continue;
+        if (opcode == 0x98 && !operand16) {
+            if (wide) {
+                const auto value = static_cast<std::uint32_t>(registers_[0]);
+                registers_[0] = (value & 0x80000000u)
+                    ? (static_cast<std::uint64_t>(value) | UINT64_C(0xFFFFFFFF00000000))
+                    : value;
+            } else {
+                const auto value = static_cast<std::uint16_t>(registers_[0]);
+                registers_[0] = (value & 0x8000u)
+                    ? (static_cast<std::uint32_t>(value) | 0xFFFF0000u)
+                    : value;
+            }
+            continue;
+        }
+        // Byte MOV (88/8A) and immediate byte MOV (C6 /0).
+        // Without REX, byte register codes 4..7 select AH/CH/DH/BH.
+        if (!operand16 && (opcode == 0x88 || opcode == 0x8A || opcode == 0xC6)) {
+            const auto modrm = read8();
+            const auto group = static_cast<unsigned>((modrm >> 3) & 7);
+            if (opcode == 0xC6 && group != 0)
+                throw std::runtime_error("Unsupported C6 group operation");
+            const auto operand = decodeOperand(modrm, extended, rexX, opcode == 0xC6 ? 1 : 0);
+            const auto readByteReg = [&](std::size_t index) -> std::uint8_t {
+                if (!hasRex && index >= 4 && index <= 7)
+                    return static_cast<std::uint8_t>(registers_[index - 4] >> 8);
+                return static_cast<std::uint8_t>(registers_[index]);
+            };
+            const auto writeByteReg = [&](std::size_t index, std::uint8_t value) {
+                if (!hasRex && index >= 4 && index <= 7) {
+                    const auto parent = index - 4;
+                    registers_[parent] = (registers_[parent] & ~UINT64_C(0xFF00)) |
+                        (static_cast<std::uint64_t>(value) << 8);
+                } else {
+                    registers_[index] = (registers_[index] & ~UINT64_C(0xFF)) | value;
+                }
+            };
+            const auto readByte = [&]() -> std::uint8_t {
+                if (operand.isRegister) return readByteReg(operand.index);
+                if (operand.address >= memory_.size())
+                    throw std::runtime_error("Guest byte read out of bounds");
+                return memory_[static_cast<std::size_t>(operand.address)];
+            };
+            const auto writeByte = [&](std::uint8_t value) {
+                if (operand.isRegister) writeByteReg(operand.index, value);
+                else {
+                    if (operand.address >= memory_.size())
+                        throw std::runtime_error("Guest byte write out of bounds");
+                    memory_[static_cast<std::size_t>(operand.address)] = value;
+                }
+            };
+            const auto reg = static_cast<std::size_t>(group + (rexR ? 8 : 0));
+            if (opcode == 0x88) writeByte(readByteReg(reg));
+            else if (opcode == 0x8A) writeByteReg(reg, readByte());
+            else writeByte(read8());
+            continue;
+        }
         // MOVSXD r64,r/m32 (REX.W + 63 /r).
         // Without REX.W, opcode 63 is deliberately unsupported here:
         // the legacy-width form has different destination semantics.
@@ -493,6 +552,15 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
         // Two-operand signed IMUL r32/r64, r/m32/r/m64 (0F AF).
         if (opcode == 0x0F) {
             const auto second = read8();
+            // 0F 1F /0: multi-byte NOP with ModR/M/SIB/displacement.
+            // Decode addressing bytes but never dereference the operand.
+            if (second == 0x1F && !operand16) {
+                const auto modrm = read8();
+                if (((modrm >> 3) & 7) != 0)
+                    throw std::runtime_error("Unsupported multi-byte NOP group");
+                (void)decodeOperand(modrm, extended, rexX);
+                continue;
+            }
             // CMOVcc r32/r64,r/m32/r/m64 (0F 40..4F).
             // x86 reads the source even when the condition is false;
             // memory faults therefore cannot be skipped by a false CMOV.
