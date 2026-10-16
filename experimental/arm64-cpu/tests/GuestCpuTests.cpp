@@ -1,6 +1,6 @@
 #include "GuestCpu.hpp"
 #include <array>
-#include <cassert>
+#include <cstdlib>
 #include <cstdint>
 #include <stdexcept>
 
@@ -12,7 +12,7 @@ int main() {
         0x05, 0x02, 0, 0, 0,
         0xC3, 0x90
     };
-    assert(GuestCpu(addition).run() == 42);
+    if (GuestCpu(addition).run() != 42) return EXIT_FAILURE;
     const std::array<std::uint8_t, 1> invalid{0x90};
     bool rejected = false;
     try {
@@ -20,7 +20,7 @@ int main() {
     } catch (const std::runtime_error&) {
         rejected = true;
     }
-    assert(rejected);
+    if (!rejected) return EXIT_FAILURE;
     const std::array<std::uint8_t, 5> truncated{0xB8, 1, 2, 3, 4};
     rejected = false;
     try {
@@ -28,12 +28,13 @@ int main() {
     } catch (const std::runtime_error&) {
         rejected = true;
     }
-    assert(rejected);
+    if (!rejected) return EXIT_FAILURE;
     rejected = false;
     try {
         GuestCpu(addition).run(1);
     } catch (const std::runtime_error&) {
         rejected = true;
     }
-    assert(rejected);
+    if (!rejected) return EXIT_FAILURE;
+    return EXIT_SUCCESS;
 }
