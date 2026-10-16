@@ -19,6 +19,7 @@ def render(data):
     done = sum(state == "implemented" for _, state in all_items)
     total = len(all_items)
     pct = 100 * done / total if total else 0
+    milestone_id = data["milestone"].split(" ", 1)[0]
     width, height = 1200, 570
     lines = [
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" role="img" aria-label="AnyPS5 iOS ARM64 feature treemap">',
@@ -33,7 +34,7 @@ def render(data):
         '<rect x="327" y="111" width="166" height="48" fill="#3d4249"/>',
         '<text class="body" x="343" y="142">Milestone</text>',
         '<rect x="493" y="111" width="108" height="48" fill="#56c900"/>',
-        '<text class="body" x="512" y="142">M3</text>',
+        f'<text class="body" x="512" y="142">{html.escape(milestone_id)}</text>',
         f'<text class="body" x="36" y="204">Experimental CPU feature inventory: {pct:.1f}% ({done}/{total})</text>',
         '<text class="muted" x="36" y="229">Green = implemented · Grey = planned · Amber = in progress</text>',
     ]
