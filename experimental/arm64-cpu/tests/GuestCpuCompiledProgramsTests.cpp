@@ -21,6 +21,10 @@ extern "C" unsigned fixture_digit_sum(unsigned);
 extern "C" unsigned fixture_reverse_bits(unsigned);
 extern "C" unsigned fixture_array_sum(const unsigned*, unsigned);
 extern "C" unsigned fixture_array_sort(unsigned*, unsigned);
+extern "C" unsigned fixture_recursive_factorial(unsigned, unsigned (*)(unsigned));
+static unsigned nativeRecursive(unsigned n) {
+    return fixture_recursive_factorial(n, nativeRecursive);
+}
 
 struct Fixture {
     const char* name;
@@ -123,6 +127,44 @@ int main() {
                 std::fprintf(stderr, "ERROR %s(%u): %s\\n",
                     sorting ? "array_sort" : "array_sum", length, e.what());
             }
+        }
+    }
+    // Real compiler-generated indirect CALL, recursive stack frames and
+    // nested RET. A guest trampoline supplies the callback pointer in ESI
+    // before jumping back to the same compiled function. All addresses
+    // are offsets in the bounded guest code vector, not host pointers.
+    for (unsigned n = 0; n <= 12; ++n) {
+        constexpr auto functionOffset = 10u;
+        const auto body = std::span<const std::uint8_t>(
+            stage3_generated::fixture_recursive_factorial);
+        const auto trampolineOffset = functionOffset + static_cast<unsigned>(body.size());
+        std::vector<std::uint8_t> code{0xBF};
+        const auto put32 = [&](std::uint32_t value) {
+            for (unsigned i = 0; i < 4; ++i)
+                code.push_back(static_cast<std::uint8_t>(value >> (8 * i)));
+        };
+        put32(n);
+        code.push_back(0xBE); put32(trampolineOffset);
+        code.insert(code.end(), body.begin(), body.end());
+        code.push_back(0xBE); put32(trampolineOffset);
+        code.push_back(0xE9);
+        put32(static_cast<std::uint32_t>(
+            -static_cast<std::int64_t>(body.size() + 10u)));
+        ++total;
+        try {
+            const auto expected = nativeRecursive(n);
+            const auto actual = GuestCpu(code, 65536).run(100000);
+            if (actual == expected) ++passed;
+            else {
+                ++mismatch;
+                std::fprintf(stderr, "MISMATCH recursive_factorial(%u) expected=%u actual=%llu\\n",
+                    n, expected, static_cast<unsigned long long>(actual));
+            }
+        } catch (const std::exception& e) {
+            const std::string message(e.what());
+            if (message.find("Unsupported") != std::string::npos) ++unsupported;
+            else ++other;
+            std::fprintf(stderr, "ERROR recursive_factorial(%u): %s\\n", n, e.what());
         }
     }
     std::printf("STAGE3 COMPATIBILITY %u/%u (%.2f%%) unsupported=%u mismatches=%u errors=%u\n",
