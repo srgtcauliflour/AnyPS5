@@ -419,5 +419,65 @@ int main() {
         std::fprintf(stderr, "INT64_MIN multiplication overflow failed at line %d\\n", __LINE__);
         return EXIT_FAILURE;
     }
+    // M9: loop sum(1..6) using DEC ECX and JNE back-edge.
+    const auto sumLoop = std::to_array<std::uint8_t>({
+        0xB8, 0, 0, 0, 0,       // mov eax,0
+        0xB9, 6, 0, 0, 0,       // mov ecx,6
+        0x03, 0xC1,             // add eax,ecx
+        0xFF, 0xC9,             // dec ecx
+        0x75, 0xFA,             // jne -6 (back to add)
+        0xC3
+    });
+    if (GuestCpu(sumLoop).run() != 21) {
+        std::fprintf(stderr, "M9 decrement loop failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
+    // INC a memory operand in a loop, then load the accumulated value.
+    const auto memoryLoop = std::to_array<std::uint8_t>({
+        0xB8, 0, 0, 0, 0,       // mov eax,0
+        0x89, 0x44, 0x24, 0xF8, // mov [rsp-8],eax
+        0xB9, 3, 0, 0, 0,       // mov ecx,3
+        0xFF, 0x44, 0x24, 0xF8, // inc dword [rsp-8]
+        0xFF, 0xC9,             // dec ecx
+        0x75, 0xF8,             // jne -8 (back to inc)
+        0x8B, 0x44, 0x24, 0xF8, // mov eax,[rsp-8]
+        0xC3
+    });
+    GuestCpu memoryLoopCpu(memoryLoop, 64);
+    if (memoryLoopCpu.run() != 3 || memoryLoopCpu.readMemory32(56) != 3) {
+        std::fprintf(stderr, "M9 memory loop failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
+    // Group 81 imm32: ADD 0x10000 then CMP, including the wide sign extension.
+    const auto imm32Arithmetic = std::to_array<std::uint8_t>({
+        0xB8, 0, 0, 0, 0,
+        0x81, 0xC0, 0, 0, 1, 0,  // add eax,65536
+        0x81, 0xF8, 0, 0, 1, 0,  // cmp eax,65536
+        0x75, 0x01, 0xC3, 0x90
+    });
+    if (GuestCpu(imm32Arithmetic).run() != 65536) {
+        std::fprintf(stderr, "M9 imm32 arithmetic failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
+    // Carry flag must survive INC and DEC (unlike ADD/SUB).
+    const auto carryPreserved = std::to_array<std::uint8_t>({
+        0xB8, 0, 0, 0, 0,       // mov eax,0
+        0x83, 0xE8, 0x01,       // sub eax,1 (CF=1)
+        0xFF, 0xC0,             // inc eax (CF must remain 1)
+        0x72, 0x01,             // jc +1
+        0x90,                   // invalid if CF lost
+        0xFF, 0xC8,             // dec eax (CF must remain 1)
+        0x72, 0x01,             // jc +1
+        0x90,
+        0xB8, 42, 0, 0, 0, 0xC3
+    });
+    if (GuestCpu(carryPreserved).run() != 42) {
+        std::fprintf(stderr, "M9 INC/DEC carry preservation failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
     return EXIT_SUCCESS;
 }
