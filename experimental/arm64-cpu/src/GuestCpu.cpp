@@ -635,6 +635,22 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             const auto modrm = read8();
             const auto operation = static_cast<unsigned>((modrm >> 3) & 7);
             const auto operand = decodeOperand(modrm, extended, rexX);
+            // FF /2 CALL r/m64 and /4 JMP r/m64. Long-mode near
+            // indirect targets are 64-bit even without REX.W.
+            if (operation == 2 || operation == 4) {
+                if (operand16)
+                    throw std::runtime_error("Unsupported 16-bit indirect branch");
+                const auto destination = readOperand(operand, true);
+                if (destination >= program_.size())
+                    throw std::runtime_error("Guest indirect branch outside code bounds");
+                if (operation == 2) {
+                    const auto returnAddress = ip_;
+                    push64(returnAddress);
+                    ++callDepth_;
+                }
+                ip_ = static_cast<std::size_t>(destination);
+                continue;
+            }
             if (operation != 0 && operation != 1)
                 throw std::runtime_error("Unsupported FF group operation");
             const auto mask = wide ? UINT64_MAX : static_cast<std::uint64_t>(UINT32_MAX);
