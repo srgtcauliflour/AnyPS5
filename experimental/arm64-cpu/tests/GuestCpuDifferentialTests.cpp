@@ -1,0 +1,116 @@
+#include "GuestCpu.hpp"
+#include <array>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <vector>
+
+using anyps5::experimental::GuestCpu;
+
+// Differential testing uses native x86-64 instructions as an independent
+// reference. No executable memory or arbitrary guest code execution is needed.
+#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+static std::uint32_t nativeShift(std::uint32_t value, std::uint8_t count,
+                                 unsigned kind) {
+    if (kind == 0) {
+        asm volatile("shll %%cl, %0" : "+r"(value) : "c"(count) : "cc");
+    } else if (kind == 1) {
+        asm volatile("shrl %%cl, %0" : "+r"(value) : "c"(count) : "cc");
+    } else {
+        asm volatile("sarl %%cl, %0" : "+r"(value) : "c"(count) : "cc");
+    }
+    return value;
+}
+
+static std::uint32_t nativeMultiply(std::uint32_t value, std::int32_t factor) {
+    asm volatile("imull %1, %0" : "+r"(value) : "r"(factor) : "cc");
+    return value;
+}
+
+static std::uint64_t nativeShift64(std::uint64_t value, std::uint8_t count,
+                                   unsigned kind) {
+    if (kind == 0) {
+        asm volatile("shlq %%cl, %0" : "+r"(value) : "c"(count) : "cc");
+    } else if (kind == 1) {
+        asm volatile("shrq %%cl, %0" : "+r"(value) : "c"(count) : "cc");
+    } else {
+        asm volatile("sarq %%cl, %0" : "+r"(value) : "c"(count) : "cc");
+    }
+    return value;
+}
+
+int main() {
+    std::uint32_t seed = 0xA17C9E53u;
+    constexpr std::array<std::uint32_t, 9> boundaries{
+        0, 1, 2, 0x7FFFFFFFu, 0x80000000u, 0xFFFFFFFFu,
+        0x55555555u, 0xAAAAAAAAu, 0x12345678u
+    };
+    for (unsigned sample = 0; sample < 256; ++sample) {
+        seed = seed * 1664525u + 1013904223u;
+        const std::uint32_t value = sample < boundaries.size()
+            ? boundaries[sample] : seed;
+        const auto count = static_cast<std::uint8_t>(sample % 65);
+        for (unsigned kind = 0; kind < 3; ++kind) {
+            // mov eax,imm32; mov ecx,imm32; shl/shr/sar eax,cl; ret
+            std::array<std::uint8_t, 13> code{
+                0xB8, 0, 0, 0, 0, 0xB9, count, 0, 0, 0,
+                0xD3, static_cast<std::uint8_t>(kind == 0 ? 0xE0 :
+                                                 kind == 1 ? 0xE8 : 0xF8), 0xC3
+            };
+            for (unsigned i = 0; i < 4; ++i)
+                code[1 + i] = static_cast<std::uint8_t>(value >> (i * 8));
+            const auto expected = nativeShift(value, count, kind);
+            const auto actual = GuestCpu(code).run();
+            if (actual != expected) {
+                std::fprintf(stderr,
+                    "32-bit shift mismatch sample=%u kind=%u count=%u value=%08x expected=%08x actual=%llx\\n",
+                    sample, kind, count, value, expected,
+                    static_cast<unsigned long long>(actual));
+                return EXIT_FAILURE;
+            }
+            // mov rax,imm64; mov ecx,imm32; REX.W shift rax,cl; ret
+            const std::uint64_t wideValue =
+                (static_cast<std::uint64_t>(value) << 32) | (~value);
+            std::array<std::uint8_t, 20> wideCode{
+                0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0,
+                0xB9, count, 0, 0, 0,
+                0x48, 0xD3, static_cast<std::uint8_t>(kind == 0 ? 0xE0 :
+                                                       kind == 1 ? 0xE8 : 0xF8),
+                0xC3, 0x90
+            };
+            for (unsigned i = 0; i < 8; ++i)
+                wideCode[2 + i] = static_cast<std::uint8_t>(wideValue >> (i * 8));
+            const auto wideExpected = nativeShift64(wideValue, count, kind);
+            const auto wideActual = GuestCpu(wideCode).run();
+            if (wideActual != wideExpected) {
+                std::fprintf(stderr,
+                    "64-bit shift mismatch sample=%u kind=%u count=%u expected=%llx actual=%llx\\n",
+                    sample, kind, count,
+                    static_cast<unsigned long long>(wideExpected),
+                    static_cast<unsigned long long>(wideActual));
+                return EXIT_FAILURE;
+            }
+        }
+        const auto factor = static_cast<std::int8_t>(sample);
+        std::array<std::uint8_t, 9> imul{
+            0xB9, 0, 0, 0, 0, 0x6B, 0xC1,
+            static_cast<std::uint8_t>(factor), 0xC3
+        };
+        for (unsigned i = 0; i < 4; ++i)
+            imul[1 + i] = static_cast<std::uint8_t>(value >> (i * 8));
+        const auto expected = nativeMultiply(value, factor);
+        const auto actual = GuestCpu(imul).run();
+        if (actual != expected) {
+            std::fprintf(stderr,
+                "IMUL mismatch sample=%u value=%08x factor=%d expected=%08x actual=%llx\\n",
+                sample, value, static_cast<int>(factor), expected,
+                static_cast<unsigned long long>(actual));
+            return EXIT_FAILURE;
+        }
+    }
+    std::puts("Differential CPU tests passed (256 deterministic samples; native x86-64 reference)");
+    return EXIT_SUCCESS;
+}
+#else
+#error "Differential tests require x86-64 with GCC or Clang"
+#endif
