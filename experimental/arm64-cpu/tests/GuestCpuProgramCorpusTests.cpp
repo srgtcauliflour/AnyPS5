@@ -97,5 +97,49 @@ int main() {
             return EXIT_FAILURE;
         }
     }
+    // Phase 2: parity flags from logical and arithmetic operations.
+    const std::array<std::uint8_t, 15> parityEven{
+        0xB8, 3, 0, 0, 0,  // eax=3 (two set bits, even parity)
+        0x85, 0xC0,       // test eax,eax
+        0x0F, 0x9A, 0xC1, // setp cl
+        0x0F, 0xB6, 0xC1, // movzx eax,cl
+        0xC3, 0x90
+    };
+    if (!check("even parity", GuestCpu(parityEven).run(), 1))
+        return EXIT_FAILURE;
+    const std::array<std::uint8_t, 14> parityOdd{
+        0xB8, 1, 0, 0, 0,
+        0x85, 0xC0,
+        0x0F, 0x9B, 0xC1, // setnp cl
+        0x0F, 0xB6, 0xC1,
+        0xC3
+    };
+    if (!check("odd parity", GuestCpu(parityOdd).run(), 1))
+        return EXIT_FAILURE;
+
+    // Repeated operand prefixes and 16-bit immediate register writes.
+    const std::array<std::uint8_t, 17> wordImmediate{
+        0x48, 0xB8, 0x78, 0x56, 0x34, 0x12, 0, 0, 0, 0,
+        0x66, 0x66, 0xB8, 42, 0, 0xC3, 0x90
+    };
+    if (!check("word immediate preserves upper register", GuestCpu(wordImmediate).run(),
+               UINT64_C(0x1234002A)))
+        return EXIT_FAILURE;
+    const std::array<std::uint8_t, 17> rexWideOverridesWord{
+        0x66, 0x48, 0xB8, 42, 0, 0, 0, 0, 0, 0, 0, 0xC3,
+        0x90, 0x90, 0x90, 0x90, 0x90
+    };
+    if (!check("REX.W overrides 66", GuestCpu(rexWideOverridesWord).run(), 42))
+        return EXIT_FAILURE;
+    const std::array<std::uint8_t, 16> tooManyPrefixes{
+        0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+        0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x90
+    };
+    try {
+        (void)GuestCpu(tooManyPrefixes).run();
+        std::fprintf(stderr, "overlong prefixes unexpectedly accepted\\n");
+        return EXIT_FAILURE;
+    } catch (const std::runtime_error&) {}
+
     return EXIT_SUCCESS;
 }
