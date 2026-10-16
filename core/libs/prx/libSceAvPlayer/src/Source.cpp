@@ -3,6 +3,7 @@
 
 #include "prx/libSceAvPlayer/include/AvPlayer.hpp"
 #include "prx/libc/include/General.hpp"
+#include "prx/libc/include/FilesystemError.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -150,6 +151,7 @@ public:
     void Reset(double milliseconds) {
         base = milliseconds;
         running = false;
+        paused = false;
     }
 
     void Pause() {
@@ -243,7 +245,9 @@ public:
             format->pb = replacement->Context();
             format->flags |= AVFMT_FLAG_CUSTOM_IO;
         } else {
-            const auto resolved = ResolvePath_nid_no_patch(path.c_str()).u8string();
+            std::filesystem::path hostPath;
+            if (ResolvePathError_nid_no_patch(path.c_str(), hostPath) != 0) return false;
+            const auto resolved = hostPath.u8string();
             url = "file:" + std::string(resolved.begin(), resolved.end());
         }
         if (const int error = avformat_open_input(&format, replacement ? nullptr : url.c_str(), nullptr, nullptr); error < 0) {
@@ -339,6 +343,7 @@ public:
             demuxEpoch = 1;
             minEpoch = 1;
             clockEpoch = 0;
+            loopEpochs.clear();
             audioDriving = false;
             presented = false;
             lastPresented = 0;
@@ -509,9 +514,9 @@ private:
             presentationClock.Rebase(static_cast<double>(front.info.timestamp));
             clockEpoch = front.epoch;
         }
-        if (synced) {
+        if (synced || audioDriving) {
             const auto now = presentationClock.Now();
-            if (static_cast<double>(front.info.timestamp) > now) return false;
+            if (synced && static_cast<double>(front.info.timestamp) > now) return false;
             while (frames.size() > 1 && frames[1].epoch == frames.front().epoch && static_cast<double>(frames[1].info.timestamp) <= now) recycleFront(video);
         }
         present(video, info);
@@ -712,6 +717,12 @@ private:
         decoder.current = std::move(decoder.frames.front());
         decoder.frames.pop_front();
         info = decoder.current->info;
+        bool looped = false;
+        while (!loopEpochs.empty() && loopEpochs.front() <= decoder.current->epoch) {
+            looped = looped || loopEpochs.front() == decoder.current->epoch;
+            loopEpochs.pop_front();
+        }
+        if (looped) events.OnWarning(SCE_AVPLAYER_ERROR_WAR_LOOPING_BACK);
     }
 
     void dropLateAudio() {
@@ -752,6 +763,7 @@ private:
                     presentationClock.Rebase(static_cast<double>(requested->target));
                     ++demuxEpoch;
                     minEpoch = demuxEpoch;
+                    loopEpochs.clear();
                     for (auto* decoder : {&video, &audio}) {
                         if (decoder->stream < 0) continue;
                         for (auto& item : decoder->packets) av_packet_free(&item.packet);
@@ -784,10 +796,10 @@ private:
                     {
                         std::lock_guard lock(mutex);
                         ++demuxEpoch;
+                        loopEpochs.push_back(demuxEpoch);
                         pushAll(PacketKind::Drain, demuxEpoch, 0);
                     }
                     condition.notify_all();
-                    events.OnWarning(SCE_AVPLAYER_ERROR_WAR_LOOPING_BACK);
                     continue;
                 }
                 {
@@ -1067,6 +1079,7 @@ private:
     std::uint64_t demuxEpoch = 0;
     std::uint64_t minEpoch = 0;
     std::uint64_t clockEpoch = 0;
+    std::deque<std::uint64_t> loopEpochs;
     bool audioDriving = false;
     bool presented = false;
     std::uint64_t lastPresented = 0;

@@ -4,6 +4,12 @@
 #include <stdexcept>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+
 extern "C" {
 int APS5_VABI scePthreadCreate(Pthread* thread, const PthreadAttr* attr, PthreadEntry entry, void* arg, const char* name);
 int APS5_VABI scePthreadJoin(Pthread thread, void** retval);
@@ -68,7 +74,12 @@ bool ForceThrows(KernelModule handle) {
 
 int main() {
     self = ModuleOf(&dsoHandle);
-    void* otherDso = reinterpret_cast<void*>(&_sceLibcInternalThreadDtors_nid_postfix);
+#ifdef _WIN32
+    void* otherDso = reinterpret_cast<void*>(GetProcAddress(GetModuleHandleA("libSceLibcInternal.prx"), "_sceLibcInternalThreadDtors_nid_postfix"));
+#else
+    void* otherDso = dlsym(RTLD_NEXT, "_sceLibcInternalThreadDtors_nid_postfix");
+#endif
+    Require(otherDso != nullptr);
     const KernelModule other = ModuleOf(otherDso);
     Require(other != self && other != 0);
     int local = 0;

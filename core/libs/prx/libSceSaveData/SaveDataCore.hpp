@@ -106,14 +106,6 @@ constexpr char SD_MEMORY_PREFIX[] = "sce_sdmemory";
 constexpr std::size_t SD_MOUNT_PREFIX_LEN = sizeof(SD_ROOT_GUEST);
 constexpr std::size_t SD_MOUNT_POINT_CAPACITY = sizeof(SaveDataMountPoint) - SD_MOUNT_PREFIX_LEN - 1;
 
-struct MemoryData {
-    void* buf;
-    std::size_t buf_size;
-    std::int64_t offset;
-    std::uint8_t reserved[40];
-};
-static_assert(sizeof(MemoryData) == 64, "SceSaveDataMemoryData is 64 bytes");
-
 struct MemorySync {
     std::int32_t user_id;
     std::uint32_t slot_id;
@@ -203,7 +195,7 @@ const std::filesystem::path& save_root() {
 }
 
 bool ensure_save_root(std::error_code& error) {
-    std::filesystem::create_directories(save_root(), error);
+    if (std::filesystem::create_directories(save_root(), error)) RecordWrittenPath_nid_no_patch(save_root());
     if (error) {
         error.clear();
     }
@@ -233,6 +225,7 @@ void store_aliases_locked(State& st) {
     for (const auto& [alias, dir_name] : st.aliases) {
         file << alias << '\t' << dir_name << '\n';
     }
+    RecordWrittenPath_nid_no_patch(save_root() / "_aliases");
 }
 
 std::string save_alias_locked(State& st, const std::string& dir_name) {
@@ -289,7 +282,9 @@ std::filesystem::path save_blocks_path(const std::filesystem::path& directory) {
 }
 
 bool write_blob(const std::filesystem::path& path, const void* data, std::size_t size) {
-    return replace_file(path, data, size);
+    if (!replace_file(path, data, size)) return false;
+    RecordWrittenPath_nid_no_patch(path);
+    return true;
 }
 
 bool read_blob(const std::filesystem::path& path, void* data, std::size_t size) {
@@ -499,6 +494,7 @@ int mount_internal(const SceSaveDataDirName* dir_name, std::uint32_t mount_mode,
         if (!std::filesystem::create_directories(directory, error) || error) {
             return SD_ERROR_INTERNAL;
         }
+        RecordWrittenPath_nid_no_patch(directory);
         created = true;
         if (write_u64(save_blocks_path(directory), blocks) != SD_OK) {
             std::error_code cleanup;
@@ -579,6 +575,7 @@ int delete_internal(std::int32_t user_id, const SceSaveDataDirName* dir_name,
         return SD_ERROR_NOT_FOUND;
     }
     std::filesystem::remove_all(directory, error);
+    RecordWrittenPath_nid_no_patch(directory);
     if (error) {
         return SD_ERROR_INTERNAL;
     }
@@ -868,10 +865,8 @@ std::filesystem::path memory_directory(std::int32_t user_id, std::uint32_t slot_
     return save_root() / name / std::to_string(static_cast<int>(user_id));
 }
 
-bool valid_memory_range(const MemoryData& data, std::size_t size) {
-    return data.buf != nullptr && data.offset >= 0 &&
-           static_cast<std::size_t>(data.offset) <= size &&
-           data.buf_size <= size - static_cast<std::size_t>(data.offset);
+bool valid_memory_range(const SaveDataMemoryData& data, std::size_t size) {
+    return data.buf != nullptr && data.offset <= size && data.buf_size <= size - data.offset;
 }
 
 int setup_memory_internal(const SaveDataMemorySetup2* setup, SaveDataMemorySetupResult* result,
@@ -954,14 +949,14 @@ int get_memory_internal(SaveDataMemoryGet2* get_param) {
     }
     const MemorySlot& slot = it->second;
     if (get_param->data != nullptr &&
-        !valid_memory_range(*reinterpret_cast<const MemoryData*>(get_param->data), slot.data.size())) {
+        !valid_memory_range(*get_param->data, slot.data.size())) {
         return SD_ERROR_PARAMETER;
     }
     if (get_param->param != nullptr && (slot.option & SD_MEMORY_SET_PARAM) == 0) {
         return SD_ERROR_PARAMETER;
     }
     if (get_param->data != nullptr) {
-        const MemoryData& data = *reinterpret_cast<const MemoryData*>(get_param->data);
+        const SaveDataMemoryData& data = *get_param->data;
         std::memcpy(data.buf, slot.data.data() + data.offset, data.buf_size);
     }
     if (get_param->param != nullptr) {
@@ -996,7 +991,7 @@ int set_memory_internal(const SaveDataMemorySet2* set_param) {
     }
     const std::uint32_t count =
         set_param->data != nullptr && set_param->data_num == 0 ? 1u : set_param->data_num;
-    const MemoryData* descriptors = reinterpret_cast<const MemoryData*>(set_param->data);
+    const SaveDataMemoryData* descriptors = set_param->data;
     for (std::uint32_t i = 0; i < count; i++) {
         if (!valid_memory_range(descriptors[i], it->second.data.size())) {
             return SD_ERROR_PARAMETER;
@@ -1004,7 +999,7 @@ int set_memory_internal(const SaveDataMemorySet2* set_param) {
     }
     MemorySlot updated = it->second;
     for (std::uint32_t i = 0; i < count; i++) {
-        const MemoryData& data = descriptors[i];
+        const SaveDataMemoryData& data = descriptors[i];
         std::memcpy(updated.data.data() + data.offset, data.buf, data.buf_size);
     }
     if (set_param->param != nullptr) {
@@ -1286,7 +1281,8 @@ int set_local_storage_app_status_internal(const SceSaveDataDirName* dir_name,
         return SD_ERROR_PARAMETER;
     }
     std::error_code error;
-    std::filesystem::create_directories(app_status_path(dir_name->data).parent_path(), error);
+    if (std::filesystem::create_directories(app_status_path(dir_name->data).parent_path(), error))
+        RecordWrittenPath_nid_no_patch(app_status_path(dir_name->data).parent_path());
     if (error) {
         return SD_ERROR_INTERNAL;
     }
@@ -1301,7 +1297,8 @@ int delete_local_storage_app_status_internal(const SceSaveDataDirName* dir_name,
         return SD_ERROR_PARAMETER;
     }
     std::error_code error;
-    std::filesystem::remove(app_status_path(dir_name->data), error);
+    if (std::filesystem::remove(app_status_path(dir_name->data), error))
+        RecordWrittenPath_nid_no_patch(app_status_path(dir_name->data));
     return error ? SD_ERROR_INTERNAL : SD_OK;
 }
 

@@ -19,12 +19,17 @@ struct SpirvTargetOptions {
     std::span<const std::uint32_t> supportedCapabilities;
     std::span<const std::string_view> supportedExtensions;
     bool nonConstantImageOffsets = false;
+    bool narrowSubgroupClock = false;
+    bool float64DenormPreserve = false;
+    bool registrationModules = false;
+    bool fragmentDescriptorSet = false;
+    bool float16DenormPreserve = false;
 };
 
 class SpirvEmitter {
 public:
-    [[nodiscard]] std::vector<std::uint32_t> Emit(const IrProgram& program, const BindingAllocationResult& bindings, const SpirvTargetOptions& target) const;
-    [[nodiscard]] std::vector<std::uint32_t> Emit(const IrProgram& program, const ShaderStageInputInfo& inputInfo, const BindingAllocationResult& bindings, const SpirvTargetOptions& target) const;
+    [[nodiscard]] std::vector<std::uint32_t> Emit(const IrProgram& program, const CompiledBindingLayout& bindings, const SpirvTargetOptions& target) const;
+    [[nodiscard]] std::vector<std::uint32_t> Emit(const IrProgram& program, const ShaderStageInputInfo& inputInfo, const CompiledBindingLayout& bindings, const SpirvTargetOptions& target) const;
 
 };
 

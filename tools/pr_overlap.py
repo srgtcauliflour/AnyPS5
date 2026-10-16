@@ -5,56 +5,115 @@ import re
 import subprocess
 from itertools import combinations
 from pathlib import Path
+from urllib.parse import urlencode
 
 PARENT = 'if .parent then "\\(.parent.owner.login)/\\(.parent.name)" else .nameWithOwner end'
 EXPORT = re.compile(r"^\+.*\bAPS5_VABI\s+(\w+)\s*\(")
-DEPENDS = re.compile(r'Depends on:([^\r\n]*(?:\r?\n[ \t]*[-*][ \t]*#\d+[^\r\n]*)*)')
+DEPENDS = re.compile(r'Depends on:[ \t]*((?:#\d+\b(?:(?:[ \t]*,[ \t]*(?:and[ \t]+)?|[ \t]+and[ \t]+)#\d+\b)*|none\b)?(?:\r?\n[ \t]*[-*][ \t]*#\d+\b[^\r\n]*)*)')
+PLAIN_DEPENDS = re.compile(r'Depends on[ \t]+(#\d+\b(?:(?:[ \t]*,[ \t]*(?:and[ \t]+)?|[ \t]+and[ \t]+)#\d+\b)*)')
 HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))?", re.M)
 MARKER = "<!-- pr-overlap -->"
+FETCH_REFS = 100
 
 
 def git(*args):
-    return subprocess.run(["git", *args], capture_output=True, text=True, check=True).stdout
+    return subprocess.run(["git", "-c", "core.quotePath=false", *args], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout
+
+
+def own(prs, sha):
+    return {n: pr for n, pr in prs.items()
+            if pr["sha"] != sha and subprocess.run(["git", "merge-base", "--is-ancestor", pr["sha"], sha], capture_output=True).returncode != 0}
 
 
 def gh(*args):
-    return subprocess.run(["gh", *args], capture_output=True, text=True, check=True).stdout
+    return subprocess.run(["gh", *args], capture_output=True, text=True, encoding="utf-8", check=True).stdout
 
 
 def upstream():
     return os.environ.get("GITHUB_REPOSITORY") or gh("repo", "view", "--json", "nameWithOwner,parent", "--jq", PARENT).strip()
 
 
+def depends_on(body):
+    body = re.sub(r"<!--.*?-->", "", body or "", flags=re.S)
+    match = DEPENDS.search(body)
+    if not match or not match.group(1).strip():
+        match = PLAIN_DEPENDS.search(body)
+    return {int(n) for n in re.findall(r"#(\d+)", match.group(1))} if match else set()
+
+
 def open_prs(base):
-    out = gh("pr", "list", "-R", REPO, "--base", base, "-L", "200", "--json", "number,author,headRefOid,body")
+    query = urlencode({"state": "open", "base": base, "per_page": 100})
+    out = gh("api", "--paginate", f"repos/{REPO}/pulls?{query}")
     prs = {}
-    for pr in json.loads(out):
-        depends = DEPENDS.search(pr["body"] or "")
+    decoder = json.JSONDecoder()
+    offset = 0
+    page_count = 0
+    pull_requests = []
+    while offset < len(out):
+        while offset < len(out) and out[offset].isspace():
+            offset += 1
+        if offset == len(out):
+            break
+        page, offset = decoder.raw_decode(out, offset)
+        if not isinstance(page, list):
+            raise ValueError("gh api --paginate returned a non-array page")
+        page_count += 1
+        pull_requests.extend(page)
+    if page_count == 0:
+        raise ValueError("gh api --paginate returned no JSON pages")
+
+    for pr in pull_requests:
         prs[pr["number"]] = {
             "ref": f"refs/pr/{pr['number']}",
-            "sha": pr["headRefOid"],
-            "author": pr["author"]["login"],
-            "depends": {int(n) for n in re.findall(r"#(\d+)", depends.group(1))} if depends else set(),
+            "sha": pr["head"]["sha"],
+            "author": pr["user"]["login"],
+            "depends": depends_on(pr["body"]),
         }
     return prs
 
 
 def fetch(base, prs):
-    refspecs = [f"+refs/heads/{base}:refs/pr/base"] + [f"+refs/pull/{n}/head:{pr['ref']}" for n, pr in prs.items()]
-    git("fetch", "--no-tags", "-q", f"https://github.com/{REPO}.git", *refspecs)
+    refspecs = [f"+refs/heads/{base}:refs/pr/base"] + [f"+{pr['sha']}:{pr['ref']}" for pr in prs.values()]
+    for start in range(0, len(refspecs), FETCH_REFS):
+        git("fetch", "--no-tags", "-q", f"https://github.com/{REPO}.git", *refspecs[start:start + FETCH_REFS])
 
 
 def merge(*args):
-    result = subprocess.run(["git", "merge-tree", "--write-tree", "--name-only", "--no-messages", *args],
-                            capture_output=True, text=True)
+    result = subprocess.run(["git", "-c", "core.quotePath=false", "merge-tree", "--write-tree", "--name-only", "--no-messages", *args],
+                            capture_output=True, text=True, encoding="utf-8", errors="replace")
     lines = result.stdout.splitlines()
+    if result.returncode not in (0, 1) or not lines:
+        raise RuntimeError(f"git merge-tree {' '.join(args)} failed: {result.stderr.strip()}")
     return lines[0], set(lines[1:]) if result.returncode else set()
+
+
+def commit(tree):
+    return git("-c", "user.name=pr_overlap", "-c", "user.email=pr_overlap", "commit-tree", tree,
+               "-p", "refs/pr/base", "-m", "pr_overlap").strip()
+
+
+def exports(diff):
+    found = set()
+    lines = diff.splitlines()
+    for i, line in enumerate(lines):
+        m = EXPORT.match(line)
+        if not m or m.group(1).endswith(("_nid_no_patch", "_nid_no_patch_cut")):
+            continue
+        text = line[1:]
+        for nxt in lines[i + 1:]:
+            if ";" in text or "{" in text or not nxt.startswith("+") or nxt.startswith("+++"):
+                break
+            text += nxt[1:]
+        semi, brace = text.find(";"), text.find("{")
+        if semi < 0 or 0 <= brace < semi:
+            found.add(m.group(1))
+    return found
 
 
 def scan(pr):
     tree, conflicted = merge("refs/pr/base", pr["ref"])
-    pr["tree"] = None if conflicted else tree
-    old, new = (git("merge-base", "refs/pr/base", pr["ref"]).strip(), pr["ref"]) if conflicted else ("refs/pr/base", tree)
+    pr["tree"] = None if conflicted else commit(tree)
+    old, new = (git("merge-base", "refs/pr/base", pr["ref"]).strip(), pr["ref"]) if conflicted else ("refs/pr/base", pr["tree"])
     pr["files"], pr["added"] = set(), set()
     for line in git("diff", "--name-status", "--no-renames", old, new).splitlines():
         status, path = line.split("\t", 1)
@@ -62,13 +121,16 @@ def scan(pr):
         if status == "A":
             pr["added"].add(path)
     diff = git("diff", "-U0", "--no-color", old, new, "--", "core/libs/prx/*.cpp")
-    pr["exports"] = {m.group(1) for m in map(EXPORT.match, diff.splitlines())
-                     if m and not m.group(1).endswith("_nid_no_patch")}
+    pr["exports"] = exports(diff)
 
 
 def hunks(pr, path):
     diff = git("diff", "-U0", "--no-color", "refs/pr/base", pr["tree"], "--", path)
-    return [(int(start), int(start) + max(int(count or 1), 1) - 1) for start, count in HUNK.findall(diff)]
+    found = []
+    for start, count in HUNK.findall(diff):
+        start = max(int(start), 1)
+        found.append((start, start + max(int(count or 1), 1) - 1))
+    return found
 
 
 def clashes(a, b, path):
@@ -86,18 +148,34 @@ def clashes(a, b, path):
 def conflicts(a, b):
     if not (a["tree"] and b["tree"] and a["files"] & b["files"]):
         return {}
-    files = merge("--merge-base=refs/pr/base", a["tree"], b["tree"])[1]
+    files = merge(a["tree"], b["tree"])[1]
     return {path: [] if path in a["added"] else clashes(a, b, path) for path in files}
+
+
+def dependencies(prs, number):
+    found, pending = set(), [number]
+    while pending:
+        for n in prs[pending.pop()]["depends"]:
+            if n in prs and n not in found:
+                found.add(n)
+                pending.append(n)
+    return found
 
 
 def overlaps(prs, a, b):
     pa, pb = prs[a], prs[b]
-    if b in pa["depends"] or a in pb["depends"]:
+    da, db = dependencies(prs, a), dependencies(prs, b)
+    if b in da or a in db:
         return None
-    found = {"added": pa["added"] & pb["added"]}
+    shared = [prs[n] for n in da & db]
+    found = {"added": (pa["added"] & pb["added"]).difference(*(pr["added"] for pr in shared))}
     if pa["author"] != pb["author"]:
         found["conflicts"] = conflicts(pa, pb)
-        found["exports"] = pa["exports"] & pb["exports"]
+        found["exports"] = (pa["exports"] & pb["exports"]).difference(*(pr["exports"] for pr in shared))
+        if not (pa["tree"] and pb["tree"]):
+            uncompared = pa.get("files", set()) & pb.get("files", set())
+            if uncompared:
+                found["uncompared"] = uncompared
     return found if any(found.values()) else None
 
 
@@ -110,18 +188,46 @@ def spans(conflicts, blob):
                                                for s, e in ranges) for path, ranges in sorted((conflicts or {}).items()))
 
 
+def pull(blob, number):
+    return f'[PR {number}]({blob.split("/blob/", 1)[0].replace("https://github.com/", "https://www.github.com/", 1)}/pull/{number})'
+
+
 def report(rows, blob):
     if not rows:
         return ""
-    lines = [MARKER,
-             "Other open pull requests touch the same code. Merging one will break the other, "
-             "or both implement the same thing. If this one builds on them, list them in **Depends on**.",
-             "",
-             "| Pull request | Conflicting files (lines on `main`) | Same exports | Same new files |",
-             "|---|---|---|---|"]
-    for number, found in sorted(rows.items()):
-        lines.append(f'| #{number} | {spans(found.get("conflicts"), blob)} | {cell(found.get("exports"))} | {cell(found["added"])} |')
+    confirmed = {number: found for number, found in rows.items()
+                 if found.get("conflicts") or found.get("exports") or found["added"]}
+    uncompared = {number: found["uncompared"] for number, found in rows.items() if found.get("uncompared")}
+    lines = [MARKER]
+    if confirmed:
+        lines.extend([
+            "Other open pull requests touch the same code. Merging one will break the other, "
+            "or both implement the same thing. If this one builds on them, list them in **Depends on**.",
+            "",
+            "| Pull request | Conflicting files (lines on `main`) | Same exports | Same new files |",
+            "|---|---|---|---|",
+        ])
+        for number, found in sorted(confirmed.items()):
+            lines.append(f'| {pull(blob, number)} | {spans(found.get("conflicts"), blob)} | {cell(found.get("exports"))} | {cell(found["added"])} |')
+    if uncompared:
+        if confirmed:
+            lines.append("")
+        lines.extend([
+            "Some comparisons could not be completed because a pull request conflicts with the base branch. "
+            "Review these shared files manually before concluding that there is no overlap.",
+            "",
+            "| Pull request | Shared files not compared |",
+            "|---|---|",
+        ])
+        for number, files in sorted(uncompared.items()):
+            lines.append(f"| {pull(blob, number)} | {cell(files)} |")
     return "\n".join(lines) + "\n"
+
+
+def write_reports(out, rows, blob):
+    out.mkdir(parents=True, exist_ok=True)
+    for number, found in rows.items():
+        (out / f"{number}.md").write_text(report(found, blob), encoding="utf-8")
 
 
 if __name__ == "__main__":
@@ -138,7 +244,7 @@ if __name__ == "__main__":
     fetch(args.base, prs)
     if args.branch:
         sha = git("rev-parse", args.branch).strip()
-        prs = {n: pr for n, pr in prs.items() if pr["sha"] != sha}
+        prs = own(prs, sha)
         prs[0] = {"ref": sha, "author": None, "depends": set()}
     for pr in prs.values():
         scan(pr)
@@ -151,6 +257,4 @@ if __name__ == "__main__":
     if args.branch:
         print(report(rows[0], blob) or "No overlap with open pull requests.", end="")
         raise SystemExit
-    args.out.mkdir(parents=True, exist_ok=True)
-    for number, found in rows.items():
-        (args.out / f"{number}.md").write_text(report(found, blob))
+    write_reports(args.out, rows, blob)

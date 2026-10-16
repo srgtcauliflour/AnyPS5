@@ -36,6 +36,7 @@ struct TrampolineSite {
     std::vector<std::uint8_t> OriginalBytes;
     std::vector<std::uint8_t> Body;
     std::size_t ReturnBranchOffset;
+    std::vector<StubRelocation> Relocations = {};
 };
 
 struct ConvertResult {
@@ -64,6 +65,7 @@ struct DecodedInstructionInfo {
     std::uint8_t RexPrefix;
     ControlFlowKind FlowKind;
     bool HasRipRelativeDisp;
+    bool AddressSize32;
     std::size_t RipRelativeDispOffset;
     bool HasModRm;
     std::uint8_t ModRmByte;

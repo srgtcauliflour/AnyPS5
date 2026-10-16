@@ -12,11 +12,18 @@
 #include <codegen/x86/Sha1Lowering.hpp>
 #include <codegen/x86/Sha1Operands.hpp>
 #include <codegen/x86/StubBodyBuilder.hpp>
+#include <codegen/x86/ScalarCompareOperands.hpp>
+#include <codegen/x86/WideStoreLowering.hpp>
+#include <codegen/x86/WideStoreOperands.hpp>
+#include <codegen/x86/AndnLowering.hpp>
+#include <codegen/x86/X64InstructionDecoder.hpp>
 #include <codegen/x86/X64OpcodeConstants.hpp>
 #include <codegen/CodegenException.hpp>
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace Codegen {
@@ -38,6 +45,8 @@ const Entry& _sse4aEntry(const Sse4aOperands& operands) {
 }
 
 const Entry& _reciprocalEntry(const ReciprocalOperands& operands) {
+    if (!operands.Vex)
+        return operands.Operation == ReciprocalOperation::ReciprocalSquareRoot ? kRsqrtps : kRcpps;
     return operands.Operation == ReciprocalOperation::ReciprocalSquareRoot ? kVrsqrtps : kVrcpps;
 }
 
@@ -67,6 +76,30 @@ const Entry& _sha1Entry(const Sha1Operands& operands) {
     return kSha1rnds4;
 }
 
+Amd64OnlyMatch _trampoline(std::string name, const std::size_t length, LoweredBody body, const bool optional = false, const bool window = false) {
+    return Amd64OnlyMatch{std::move(name), length, Amd64OnlyLowering::Trampoline, {}, std::move(body.Bytes), body.ReturnBranchOffset, optional, std::move(body.Relocations), window};
+}
+
+void _moveTrailing(StubBodyBuilder& body, std::span<const std::uint8_t> trailing) {
+    const X64InstructionDecoder decoder;
+    while (!trailing.empty()) {
+        const auto info = decoder.DecodeInstruction(trailing.data(), trailing.size());
+        if (info.Length == 0 || info.Length > trailing.size())
+            throw CodegenException("Trailing bytes do not split into whole instructions");
+        body.Move(trailing.first(info.Length), info.HasRipRelativeDisp ? std::optional<std::size_t>(info.RipRelativeDispOffset) : std::nullopt);
+        trailing = trailing.subspan(info.Length);
+    }
+}
+
+template<typename TEmit>
+LoweredBody _outOfLine(const std::size_t length, const std::span<const std::uint8_t> trailing, const TEmit& emit) {
+    StubBodyBuilder body;
+    emit(body);
+    body.Advance(length);
+    _moveTrailing(body, trailing);
+    return body.Finish();
+}
+
 Amd64OnlyMatch _inPlace(const Entry& entry, const std::size_t length, std::vector<std::uint8_t> replacement) {
     while (replacement.size() < length) {
         const auto& nop = kNops[std::min<std::size_t>(length - replacement.size(), std::size(kNops)) - 1];
@@ -75,9 +108,30 @@ Amd64OnlyMatch _inPlace(const Entry& entry, const std::size_t length, std::vecto
     return Amd64OnlyMatch{entry.Name, length, Amd64OnlyLowering::InPlace, std::move(replacement), {}, 0};
 }
 
+void _emitScalarCompare(StubBodyBuilder& body, const DecodedInstruction& instr, const ScalarCompareOperands& operands) {
+    const std::span<const std::uint8_t> bytes(instr.Data, instr.Length);
+    if (operands.RipDisplacementOffset)
+        body.RipRelative(bytes, *operands.RipDisplacementOffset, operands.RipTarget);
+    else
+        body.Raw(bytes);
+}
+
 bool _isClzeroOpcode(const DecodedInstruction& instr) {
     const auto pos = instr.OpcodeOffset();
     return pos + 2 < instr.Length && instr.Data[pos] == X64OpcodeConstants::TwoByteOpcodeEscape && instr.Data[pos + 1] == X64OpcodeConstants::TwoByteGrp7 && instr.Data[pos + 2] == 0xFC;
+}
+
+std::vector<std::uint8_t> _rdpidReplacement(const DecodedInstruction& instr) {
+    using namespace X64OpcodeConstants;
+    const auto opcode = instr.OpcodeOffset();
+    const auto rex = opcode > 0 && instr.Data[opcode - 1] >= RexMin && instr.Data[opcode - 1] <= RexMax ? instr.Data[opcode - 1] : 0;
+    const auto reg = static_cast<std::uint8_t>((instr.Data[opcode + 2] & ModRmRmMask) | ((rex & 1) << 3));
+    std::vector<std::uint8_t> bytes;
+    if (reg >= 8)
+        bytes.push_back(0x41);
+    bytes.push_back(static_cast<std::uint8_t>(0xB8 + (reg & 7)));
+    bytes.insert(bytes.end(), 4, 0);
+    return bytes;
 }
 
 bool _validWait(const DecodedInstruction& instr) {
@@ -87,6 +141,8 @@ bool _validWait(const DecodedInstruction& instr) {
 
 class Amd64OnlyInstructionMatcher : public IAmd64OnlyInstructionMatcher {
 public:
+    explicit Amd64OnlyInstructionMatcher(const Amd64OnlyTarget target) : _target(target) {}
+
     [[nodiscard]] std::optional<Amd64OnlyMatch> Match(
         const std::uint8_t* data,
         std::size_t length,
@@ -98,18 +154,27 @@ public:
         std::span<const std::uint8_t> trailing
     ) const override;
 
+    void EmitOutOfLine(
+        StubBodyBuilder& body,
+        std::span<const std::uint8_t> instruction
+    ) const override;
+
 private:
+    Amd64OnlyTarget _target;
     Sse4aLowering _lowering;
     Sha256Lowering _sha256Lowering;
     Sha1Lowering _sha1Lowering;
     ClzeroLowering _clzeroLowering;
     ReciprocalLowering _reciprocalLowering;
+    WideStoreLowering _wideStoreLowering;
 
     [[nodiscard]] Amd64OnlyMatch _matchMovnts(const DecodedInstruction& instr, const Entry& entry) const;
     [[nodiscard]] Amd64OnlyMatch _matchSse4a(const DecodedInstruction& instr, const Entry& entry, const Entry& registerFormEntry, std::span<const std::uint8_t> trailing) const;
     [[nodiscard]] Amd64OnlyMatch _matchSha256(const DecodedInstruction& instr, std::span<const std::uint8_t> trailing) const;
     [[nodiscard]] Amd64OnlyMatch _matchSha1(const DecodedInstruction& instr, std::span<const std::uint8_t> trailing) const;
     [[nodiscard]] Amd64OnlyMatch _matchClzero(const DecodedInstruction& instr, std::span<const std::uint8_t> trailing) const;
+    [[nodiscard]] std::optional<Amd64OnlyMatch> _matchRosetta(const DecodedInstruction& instr, std::span<const std::uint8_t> trailing) const;
+    [[nodiscard]] const char* _emitOutOfLine(StubBodyBuilder& body, const DecodedInstruction& instr) const;
 };
 
 Amd64OnlyMatch Amd64OnlyInstructionMatcher::_matchMovnts(const DecodedInstruction& instr, const Entry& entry) const {
@@ -131,26 +196,93 @@ Amd64OnlyMatch Amd64OnlyInstructionMatcher::_matchSse4a(const DecodedInstruction
         if (auto inPlace = _lowering.LowerInPlace(operands, instr.Length))
             return Amd64OnlyMatch{entry.Name, instr.Length, Amd64OnlyLowering::InPlace, std::move(*inPlace), {}, 0};
     }
-    auto body = _lowering.LowerOutOfLine(operands, trailing);
     const auto& name = operands.RegisterForm ? registerFormEntry.Name : entry.Name;
-    return Amd64OnlyMatch{name, instr.Length, Amd64OnlyLowering::Trampoline, {}, std::move(body.Bytes), body.ReturnBranchOffset};
+    return _trampoline(name, instr.Length, _outOfLine(instr.Length, trailing, [&](StubBodyBuilder& body) { _lowering.EmitOutOfLine(body, operands); }));
 }
 
 Amd64OnlyMatch Amd64OnlyInstructionMatcher::_matchSha256(const DecodedInstruction& instr, std::span<const std::uint8_t> trailing) const {
     const auto operands = DecodeSha256(instr.Data, instr.Length);
-    auto body = _sha256Lowering.LowerOutOfLine(operands, trailing);
-    return Amd64OnlyMatch{_sha256Entry(operands).Name, instr.Length, Amd64OnlyLowering::Trampoline, {}, std::move(body.Bytes), body.ReturnBranchOffset};
+    return _trampoline(_sha256Entry(operands).Name, instr.Length, _outOfLine(instr.Length, trailing, [&](StubBodyBuilder& body) { _sha256Lowering.EmitOutOfLine(body, operands); }));
 }
 
 Amd64OnlyMatch Amd64OnlyInstructionMatcher::_matchSha1(const DecodedInstruction& instr, std::span<const std::uint8_t> trailing) const {
     const auto operands = DecodeSha1(instr.Data, instr.Length);
-    auto body = _sha1Lowering.LowerOutOfLine(operands, trailing);
-    return Amd64OnlyMatch{_sha1Entry(operands).Name, instr.Length, Amd64OnlyLowering::Trampoline, {}, std::move(body.Bytes), body.ReturnBranchOffset};
+    return _trampoline(_sha1Entry(operands).Name, instr.Length, _outOfLine(instr.Length, trailing, [&](StubBodyBuilder& body) { _sha1Lowering.EmitOutOfLine(body, operands); }));
 }
 
 Amd64OnlyMatch Amd64OnlyInstructionMatcher::_matchClzero(const DecodedInstruction& instr, std::span<const std::uint8_t> trailing) const {
-    auto body = _clzeroLowering.LowerOutOfLine(DecodeClzero(instr.Data, instr.Length), trailing);
-    return Amd64OnlyMatch{kClzero.Name, instr.Length, Amd64OnlyLowering::Trampoline, {}, std::move(body.Bytes), body.ReturnBranchOffset};
+    const auto operands = DecodeClzero(instr.Data, instr.Length);
+    return _trampoline(kClzero.Name, instr.Length, _outOfLine(instr.Length, trailing, [&](StubBodyBuilder& body) { _clzeroLowering.EmitOutOfLine(body, operands); }));
+}
+
+std::optional<Amd64OnlyMatch> Amd64OnlyInstructionMatcher::_matchRosetta(const DecodedInstruction& instr, std::span<const std::uint8_t> trailing) const {
+    if (_target != Amd64OnlyTarget::Rosetta)
+        return std::nullopt;
+    if (const auto andn = DecodeAndn(instr.Data, instr.Length))
+        return _trampoline("ANDN", instr.Length, _outOfLine(instr.Length, trailing, [&](StubBodyBuilder& body) { EmitAndn(body, *andn); }));
+    if (instr.IsRdseed()) {
+        std::vector<std::uint8_t> replacement(instr.Data, instr.Data + instr.Length);
+        replacement[instr.OpcodeOffset() + 2] &= static_cast<std::uint8_t>(~(1u << X64OpcodeConstants::ModRmRegShift));
+        return Amd64OnlyMatch{kRdseed.Name, instr.Length, Amd64OnlyLowering::InPlace, std::move(replacement), {}, 0};
+    }
+    if (instr.IsClwb())
+        return _inPlace(kClwb, instr.Length, {});
+    if (instr.IsRdpid())
+        return _trampoline(kRdpid.Name, instr.Length, _outOfLine(instr.Length, trailing, [&](StubBodyBuilder& body) { body.Raw(_rdpidReplacement(instr)); }), true);
+    if (const auto wide = DecodeVexWideStore(instr.Data, instr.Length))
+        return _trampoline(kWideStore.Name, instr.Length, _outOfLine(instr.Length, trailing, [&](StubBodyBuilder& body) { _wideStoreLowering.EmitOutOfLine(body, *wide); }), false, true);
+    if (const auto compare = DecodeScalarCompare(instr.Data, instr.Length))
+        return _trampoline(kScalarCompare.Name, instr.Length, _outOfLine(instr.Length, trailing, [&](StubBodyBuilder& body) { _emitScalarCompare(body, instr, *compare); }), true);
+    return std::nullopt;
+}
+
+const char* Amd64OnlyInstructionMatcher::_emitOutOfLine(StubBodyBuilder& body, const DecodedInstruction& instr) const {
+    if (instr.IsExtrq() || instr.IsInsertq()) {
+        const auto operands = DecodeSse4a(instr.Data, instr.Length);
+        _lowering.EmitOutOfLine(body, operands);
+        return _sse4aEntry(operands).Name;
+    }
+    if (instr.IsSha256()) {
+        const auto operands = DecodeSha256(instr.Data, instr.Length);
+        _sha256Lowering.EmitOutOfLine(body, operands);
+        return _sha256Entry(operands).Name;
+    }
+    if (instr.IsSha1()) {
+        const auto operands = DecodeSha1(instr.Data, instr.Length);
+        _sha1Lowering.EmitOutOfLine(body, operands);
+        return _sha1Entry(operands).Name;
+    }
+    if (instr.IsClzero()) {
+        _clzeroLowering.EmitOutOfLine(body, DecodeClzero(instr.Data, instr.Length));
+        return kClzero.Name;
+    }
+    if (const auto reciprocal = DecodeReciprocal(instr.Data, instr.Length)) {
+        _reciprocalLowering.EmitOutOfLine(body, *reciprocal);
+        return _reciprocalEntry(*reciprocal).Name;
+    }
+    if (_target == Amd64OnlyTarget::Rosetta && instr.IsRdpid()) {
+        body.Raw(_rdpidReplacement(instr));
+        return kRdpid.Name;
+    }
+    if (const auto andn = _target == Amd64OnlyTarget::Rosetta ? DecodeAndn(instr.Data, instr.Length) : std::nullopt) {
+        EmitAndn(body, *andn);
+        return "ANDN";
+    }
+    if (const auto wide = _target == Amd64OnlyTarget::Rosetta ? DecodeVexWideStore(instr.Data, instr.Length) : std::nullopt) {
+        _wideStoreLowering.EmitOutOfLine(body, *wide);
+        return kWideStore.Name;
+    }
+    if (const auto compare = _target == Amd64OnlyTarget::Rosetta ? DecodeScalarCompare(instr.Data, instr.Length) : std::nullopt) {
+        _emitScalarCompare(body, instr, *compare);
+        return kScalarCompare.Name;
+    }
+    return nullptr;
+}
+
+void Amd64OnlyInstructionMatcher::EmitOutOfLine(StubBodyBuilder& body, const std::span<const std::uint8_t> instruction) const {
+    if (_emitOutOfLine(body, DecodedInstruction{instruction.data(), instruction.size()}) == nullptr)
+        throw CodegenException("AMD-only instruction has no out-of-line lowering");
+    body.Advance(instruction.size());
 }
 
 std::optional<Amd64OnlyMatch> Amd64OnlyInstructionMatcher::MatchSequence(
@@ -163,38 +295,17 @@ std::optional<Amd64OnlyMatch> Amd64OnlyInstructionMatcher::MatchSequence(
     const char* name = nullptr;
     for (const auto& instruction : instructions) {
         const DecodedInstruction instr{instruction.data(), instruction.size()};
-        if (instr.IsExtrq() || instr.IsInsertq()) {
-            const auto operands = DecodeSse4a(instr.Data, instr.Length);
-            if (name == nullptr)
-                name = _sse4aEntry(operands).Name;
-            _lowering.EmitOutOfLine(body, operands);
-        } else if (instr.IsSha256()) {
-            const auto operands = DecodeSha256(instr.Data, instr.Length);
-            if (name == nullptr)
-                name = _sha256Entry(operands).Name;
-            _sha256Lowering.EmitOutOfLine(body, operands);
-        } else if (instr.IsSha1()) {
-            const auto operands = DecodeSha1(instr.Data, instr.Length);
-            if (name == nullptr)
-                name = _sha1Entry(operands).Name;
-            _sha1Lowering.EmitOutOfLine(body, operands);
-        } else if (instr.IsClzero()) {
-            const auto operands = DecodeClzero(instr.Data, instr.Length);
-            if (name == nullptr)
-                name = kClzero.Name;
-            _clzeroLowering.EmitOutOfLine(body, operands);
-        } else if (const auto reciprocal = DecodeVexReciprocal(instr.Data, instr.Length)) {
-            if (name == nullptr)
-                name = _reciprocalEntry(*reciprocal).Name;
-            _reciprocalLowering.EmitOutOfLine(body, *reciprocal);
-        } else {
+        const auto emitted = _emitOutOfLine(body, instr);
+        if (emitted == nullptr)
             return std::nullopt;
-        }
+        if (name == nullptr)
+            name = emitted;
+        body.Advance(instr.Length);
     }
-    body.Raw(trailing);
-    auto lowered = body.Finish();
-    const bool optional = DecodeVexReciprocal(instructions.front().data(), instructions.front().size()).has_value();
-    return Amd64OnlyMatch{name, instructions.front().size(), Amd64OnlyLowering::Trampoline, {}, std::move(lowered.Bytes), lowered.ReturnBranchOffset, optional};
+    _moveTrailing(body, trailing);
+    const DecodedInstruction first{instructions.front().data(), instructions.front().size()};
+    const bool optional = DecodeReciprocal(first.Data, first.Length).has_value() || (_target == Amd64OnlyTarget::Rosetta && first.IsRdpid());
+    return _trampoline(name, instructions.front().size(), body.Finish(), optional);
 }
 
 std::optional<Amd64OnlyMatch> Amd64OnlyInstructionMatcher::Match(
@@ -228,9 +339,8 @@ std::optional<Amd64OnlyMatch> Amd64OnlyInstructionMatcher::Match(
     if (instr.IsMwaitx())
         return _validWait(instr) ? _inPlace(kMwaitx, length, std::vector<std::uint8_t>(kPause.Bytes, kPause.Bytes + kPause.Size)) : _unsupported(kMwaitx, length);
 
-    if (const auto reciprocal = DecodeVexReciprocal(data, length)) {
-        auto body = _reciprocalLowering.LowerOutOfLine(*reciprocal, trailing);
-        return Amd64OnlyMatch{_reciprocalEntry(*reciprocal).Name, length, Amd64OnlyLowering::Trampoline, {}, std::move(body.Bytes), body.ReturnBranchOffset, true};
+    if (const auto reciprocal = DecodeReciprocal(data, length)) {
+        return _trampoline(_reciprocalEntry(*reciprocal).Name, length, _outOfLine(length, trailing, [&](StubBodyBuilder& body) { _reciprocalLowering.EmitOutOfLine(body, *reciprocal); }), true);
     }
 
     if (instr.IsClzero())
@@ -245,13 +355,13 @@ std::optional<Amd64OnlyMatch> Amd64OnlyInstructionMatcher::Match(
     if (instr.IsMcommit())
         return _unsupported(kMcommit, length);
 
-    return std::nullopt;
+    return _matchRosetta(instr, trailing);
 }
 
 }
 
-std::unique_ptr<IAmd64OnlyInstructionMatcher> MakeAmd64OnlyInstructionMatcher() {
-    return std::make_unique<Amd64OnlyInstructionMatcher>();
+std::unique_ptr<IAmd64OnlyInstructionMatcher> MakeAmd64OnlyInstructionMatcher(const Amd64OnlyTarget target) {
+    return std::make_unique<Amd64OnlyInstructionMatcher>(target);
 }
 
 }

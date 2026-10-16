@@ -102,7 +102,21 @@ void ValidateValueReferences(const IrProgram& program, ShaderStageInputInfo inpu
                         return Fail("interpolation parameter reference is invalid");
                     }
                     if (input->ImmediateU32() >= inputInfo.pixel->inputNum || component->ImmediateU32() >= 4u || mode->ImmediateU32() >= 3u) {
-                        return Fail("interpolation parameter reference is out of range");
+                        return Fail("interpolation parameter reference is out of range (attribute " + std::to_string(input->ImmediateU32()) + " component " + std::to_string(component->ImmediateU32()) + " mode " + std::to_string(mode->ImmediateU32()) + ", " + std::to_string(inputInfo.pixel->inputNum) + " inputs)");
+                    }
+                    break;
+                }
+                case IrOpcode::GetInterpolationParameterF16: {
+                    const IrValue* input = inst->Argument(0)->Resolve();
+                    const IrValue* component = inst->Argument(1)->Resolve();
+                    const IrValue* mode = inst->Argument(2)->Resolve();
+                    const IrValue* high = inst->Argument(3)->Resolve();
+                    if (program.Resources().stage != IrShaderStage::Pixel || !input->HasImmediate() || input->Type() != IrType::U32 || !component->HasImmediate() || component->Type() != IrType::U32 ||
+                        !mode->HasImmediate() || mode->Type() != IrType::U32 || !high->HasImmediate() || high->Type() != IrType::U32) {
+                        return Fail("16-bit interpolation parameter reference is invalid");
+                    }
+                    if (input->ImmediateU32() >= inputInfo.pixel->inputNum || component->ImmediateU32() >= 4u || mode->ImmediateU32() >= 3u || high->ImmediateU32() >= 2u) {
+                        return Fail("16-bit interpolation parameter reference is out of range");
                     }
                     break;
                 }
@@ -115,16 +129,29 @@ void ValidateValueReferences(const IrProgram& program, ShaderStageInputInfo inpu
                     const auto kind = static_cast<StageInputKind>(kindValue->ImmediateU32());
                     const auto component = componentValue->ImmediateU32();
                     switch (kind) {
-                        case StageInputKind::PackedAncillary:
-                            return Fail("packed pixel ancillary input has an unsupported live use");
+                        case StageInputKind::PackedAncillary: {
+                            std::string uses;
+                            for (const IrValue* user : inst->Uses()) {
+                                uses += uses.empty() ? " (used by " : ", ";
+                                uses += IrOpcodeName(user->Opcode());
+                                for (std::size_t i = 1; i < user->ArgumentCount(); ++i) {
+                                    const IrValue* argument = user->Argument(i)->Resolve();
+                                    uses += argument->HasImmediate() && argument->Type() == IrType::U32 ? " " + std::to_string(argument->ImmediateU32()) : " ?";
+                                }
+                            }
+                            return Fail("packed pixel ancillary input has an unsupported live use" + uses + (uses.empty() ? "" : ")"));
+                        }
                         case StageInputKind::Layer:
                         case StageInputKind::SampleId:
+                        case StageInputKind::RasterPrimitive:
+                        case StageInputKind::LayerExported:
                             if (program.Resources().stage != IrShaderStage::Pixel || component != 0u) {
                                 return Fail("typed pixel scalar input is invalid");
                             }
                             break;
                         case StageInputKind::VertexIndex:
                         case StageInputKind::InstanceIndex:
+                        case StageInputKind::BaseInstance:
                         case StageInputKind::InvocationId:
                         case StageInputKind::PrimitiveId:
                         case StageInputKind::FrontFacing:
@@ -189,7 +216,7 @@ void CollectVertexInputs(const IrProgram& program, const ShaderVertexInputInfo* 
             if (inst->Opcode() == IrOpcode::GetAttribute) {
                 const auto attribute = inst->Argument(0)->Resolve()->ImmediateU32();
                 const auto channel = inst->Argument(1)->Resolve()->ImmediateU32();
-                usedComponents[attribute] = std::max(usedComponents[attribute], channel + 1u);
+                usedComponents[attribute] = std::max(usedComponents[attribute], inst->Flags<std::uint32_t>() == 1u ? 4u : channel + 1u);
             }
         }
     }
@@ -210,7 +237,7 @@ bool IsPixelParameterFlat(const ShaderPixelInputInfo& pixel, std::uint32_t input
 }
 
 void CollectPixelInputs(const IrProgram& program, const ShaderPixelInputInfo* pixel, ShaderInfo& info) {
-    if (pixel->HasPositionInput()) {
+    if (pixel->HasPositionInput() || pixel->psDitheredAlphaToCoverage || pixel->QuadMasked()) {
         AddInput(info, StageInputKind::FragCoord, 0, 4, "gl_FragCoord");
     }
     if (pixel->psFrontFace) {
@@ -219,6 +246,7 @@ void CollectPixelInputs(const IrProgram& program, const ShaderPixelInputInfo* pi
     std::array<bool, 32> read {};
     std::array<bool, 32> perVertex {};
     std::array<bool, 32> interpolated {};
+    std::array<bool, 32> halfRead {};
     for (const auto& block : program.Blocks()) {
         for (const IrValue* inst : block->Instructions()) {
             if (inst->Opcode() == IrOpcode::GetAttribute) {
@@ -232,7 +260,15 @@ void CollectPixelInputs(const IrProgram& program, const ShaderPixelInputInfo* pi
                 const auto input = inst->Argument(0)->Resolve()->ImmediateU32();
                 const auto mode = inst->Argument(2)->Resolve()->ImmediateU32();
                 read[input] = true;
-                perVertex[input] = perVertex[input] || mode < 2u || !IsPixelParameterFlat(*pixel, input);
+                perVertex[input] = perVertex[input] || mode == 1u || !IsPixelParameterFlat(*pixel, input);
+            } else if (inst->Opcode() == IrOpcode::GetInterpolationParameterF16) {
+                const auto input = inst->Argument(0)->Resolve()->ImmediateU32();
+                const bool high = inst->Argument(3)->Resolve()->ImmediateU32() != 0u;
+                if (!pixel->InputHalfIsDefault(input, high)) {
+                    read[input] = true;
+                    perVertex[input] = true;
+                    halfRead[input] = true;
+                }
             }
         }
     }
@@ -248,7 +284,7 @@ void CollectPixelInputs(const IrProgram& program, const ShaderPixelInputInfo* pi
     slotInterpolation.fill(unassigned);
     std::array<bool, 32> slotPerVertex {};
     for (std::uint32_t input = 0; input < pixel->inputNum; input++) {
-        if (!read[input] || pixel->InputIsDefault(input)) {
+        if (!read[input] || (pixel->InputIsDefault(input) && !halfRead[input])) {
             continue;
         }
         const auto slot = pixel->InputSlot(input);
@@ -262,7 +298,7 @@ void CollectPixelInputs(const IrProgram& program, const ShaderPixelInputInfo* pi
     bool smooth = false;
     bool noPerspective = false;
     for (std::uint32_t input = 0; input < pixel->inputNum; input++) {
-        if (!read[input] || pixel->InputIsDefault(input)) {
+        if (!read[input] || (pixel->InputIsDefault(input) && !halfRead[input])) {
             continue;
         }
         const bool vertexInput = slotPerVertex[pixel->InputSlot(input)];
@@ -307,6 +343,9 @@ void CollectBuiltinInputs(const IrProgram& program, ShaderInfo& info) {
                     break;
                 case StageInputKind::InstanceIndex:
                     AddInput(info, kind, 0, 1, "gl_InstanceIndex");
+                    break;
+                case StageInputKind::BaseInstance:
+                    AddInput(info, kind, 0, 1, "gl_BaseInstance");
                     break;
                 case StageInputKind::InvocationId:
                     AddInput(info, kind, 0, 1, "gl_InvocationID");
@@ -353,6 +392,12 @@ void CollectBuiltinInputs(const IrProgram& program, ShaderInfo& info) {
                 case StageInputKind::DispatchThreadLimit:
                     info.dispatchThreadLimit = true;
                     break;
+                case StageInputKind::RasterPrimitive:
+                    info.rasterPrimitive = true;
+                    break;
+                case StageInputKind::LayerExported:
+                    info.layerExported = true;
+                    break;
                 case StageInputKind::PackedAncillary:
                 case StageInputKind::Parameter:
                     break;
@@ -374,6 +419,9 @@ void CollectOutputs(const IrProgram& program, ShaderStageInputInfo inputInfo, Sh
                 }
                 if (program.Resources().stage == IrShaderStage::Pixel && (exportInfo.en & 0x4u) != 0u && inputInfo.pixel->psSampleMaskExportEnable) {
                     AddOutput(info, StageOutputKind::SampleMask, 0, 0, "gl_SampleMask");
+                }
+                if (program.Resources().stage == IrShaderStage::Pixel && (exportInfo.en & 0x2u) != 0u && inputInfo.pixel->psStencilRefExportEnable) {
+                    AddOutput(info, StageOutputKind::StencilRef, 0, 0, "gl_FragStencilRefARB");
                 }
                 continue;
             }
@@ -424,7 +472,7 @@ void CollectOutputs(const IrProgram& program, ShaderStageInputInfo inputInfo, Sh
     }
 }
 
-std::uint8_t SamplerUseOf(IrOpcode opcode, std::uint32_t flags, IrShaderStage stage) {
+std::uint16_t SamplerUseOf(IrOpcode opcode, std::uint32_t flags, IrShaderStage stage) {
     if (opcode == IrOpcode::ImageGatherRaw) {
         return SamplerUseGather;
     }
@@ -432,6 +480,9 @@ std::uint8_t SamplerUseOf(IrOpcode opcode, std::uint32_t flags, IrShaderStage st
         return SamplerUseQueryLod;
     }
     std::uint32_t use = (flags & RdnaImageSampleFlagDerivative) != 0u ? SamplerUseGradient : ImageSampleExplicitLod(flags, stage) ? SamplerUseExplicitLod : SamplerUseImplicitLod;
+    if (use == SamplerUseExplicitLod && (flags & RdnaImageSampleFlagLevelZero) == 0u) {
+        use |= SamplerUseNonZeroLod;
+    }
     if ((flags & RdnaImageSampleFlagOffset) != 0u) {
         use |= SamplerUseOffset;
     }
@@ -441,7 +492,7 @@ std::uint8_t SamplerUseOf(IrOpcode opcode, std::uint32_t flags, IrShaderStage st
     if ((flags & RdnaImageSampleFlagAdjust) != 0u) {
         use |= SamplerUseAdjust;
     }
-    return static_cast<std::uint8_t>(use);
+    return static_cast<std::uint16_t>(use);
 }
 
 void CollectSamplerUses(const IrProgram& program, ShaderInfo& info) {
@@ -463,7 +514,7 @@ void CollectSamplerUses(const IrProgram& program, ShaderInfo& info) {
                 return Fail("image instruction references an unknown sampler");
             }
             auto& sampler = info.samplers[memory.sampler];
-            sampler.uses = static_cast<std::uint8_t>(sampler.uses | SamplerUseOf(inst->Opcode(), memory.imageSampleFlags, program.Resources().stage));
+            sampler.uses = static_cast<std::uint16_t>(sampler.uses | SamplerUseOf(inst->Opcode(), memory.imageSampleFlags, program.Resources().stage));
         }
     }
 }
@@ -491,13 +542,16 @@ void ShaderInfoCollector::Collect(IrProgram& program, const ShaderStageInputInfo
             break;
         case IrShaderStage::TessellationControl:
         case IrShaderStage::TessellationEvaluation:
+            break;
         case IrShaderStage::Mesh:
+            AddInput(next, StageInputKind::LocalInvocationIndex, 0, 1, "gl_LocalInvocationIndex");
             break;
         case IrShaderStage::Pixel:
             CollectPixelInputs(program, inputInfo.pixel, next);
             break;
         case IrShaderStage::Compute:
             CollectComputeInputs(inputInfo.compute, next);
+            if (!next.buffers.empty()) AddInput(next, StageInputKind::LocalInvocationIndex, 0, 1, "gl_LocalInvocationIndex");
             break;
         default:
             return Fail("unsupported shader stage for info collection");

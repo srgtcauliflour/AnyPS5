@@ -1,6 +1,8 @@
 #include "prx/libSceAgcDriver/Execution/include/Driver/Driver.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver/Queues/WorkerAffinity.hpp"
+#include "prx/libSceAgcDriver/Execution/include/TracyZone.hpp"
 #include "prx/libc/include/CpuTopology.hpp"
+#include "prx/libc/include/general/ThreadName.hpp"
 #include <cstdlib>
 
 namespace AgcDriver::DriverDetail {
@@ -10,7 +12,9 @@ std::uint64_t WorkerAffinityMask() {
         if (std::getenv("APS5_NO_WORKER_AFFINITY") != nullptr) return std::uint64_t{0};
         const auto requested = CpuTopology::MaskFromEnvironment("APS5_WORKER_AFFINITY_MASK");
         if (requested != 0) return requested;
+#ifndef __linux__
         if (std::getenv("APS5_WORKER_AFFINITY") == nullptr) return std::uint64_t{0};
+#endif
         const auto& layout = CpuTopology::Get();
         return layout.hybrid ? layout.performant : std::uint64_t{0};
     }();
@@ -18,6 +22,11 @@ std::uint64_t WorkerAffinityMask() {
 }
 
 void PinWorkerThread(const char* role) {
+    TracyZone::NameThread(role);
+#ifdef _WIN32
+    const HRESULT nameResult = ThreadName::SetCurrent(role);
+    if (FAILED(nameResult)) std::fprintf(stderr, "[thread-name] could not name %s (0x%08lx)\n", role, static_cast<unsigned long>(nameResult));
+#endif
     const auto mask = WorkerAffinityMask();
     if (mask == 0) return;
     static std::once_flag summary;

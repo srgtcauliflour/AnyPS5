@@ -29,9 +29,11 @@ add_library(libSceAgc SHARED EXCLUDE_FROM_ALL
         ${CMAKE_CURRENT_SOURCE_DIR}/DcbState/src/Predication.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/DcbState/src/Registers.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/DcbState/src/Workload.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Misc/src/Debug.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Misc/src/PacketInfo.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Misc/src/Platform.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Misc/src/RegisterDefaults.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Misc/src/Semaphore.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Misc/src/ShaderFusion.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Misc/src/Suspend.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Patch/src/CondExec.cpp
@@ -46,6 +48,7 @@ add_library(libSceAgc SHARED EXCLUDE_FROM_ALL
         ${CMAKE_CURRENT_SOURCE_DIR}/Predication/src/Predication.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Shader/src/CreateShader.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Shader/src/GsOversubscription.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/Shader/src/GsPrimPayload.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Shader/src/InterpolantMapping.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Shader/src/LinkShaders.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/Shader/src/PrimState.cpp
@@ -67,7 +70,7 @@ endforeach()
 
 add_test_executable(agc_command_tests EXCLUDE_FROM_ALL tests/Commands.cpp)
 target_include_directories(agc_command_tests PRIVATE ${LIBS_INCLUDE_DIR})
-target_link_libraries(agc_command_tests PRIVATE libSceAgc libc)
+target_link_libraries(agc_command_tests PRIVATE libSceAgc libSceAgcDriver libc)
 configure_windows_unwind(agc_command_tests)
 if(BUILD_TESTING)
     set_target_properties(agc_command_tests PROPERTIES EXCLUDE_FROM_ALL OFF)
@@ -89,6 +92,19 @@ if(BUILD_TESTING)
     add_test(NAME agc_platform_tests COMMAND agc_platform_tests)
     if(WIN32)
         set_tests_properties(agc_platform_tests PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
+    endif()
+endif()
+
+add_test_executable(agc_semaphore_tests EXCLUDE_FROM_ALL tests/Semaphore.cpp)
+target_include_directories(agc_semaphore_tests PRIVATE ${LIBS_INCLUDE_DIR})
+target_link_libraries(agc_semaphore_tests PRIVATE libSceAgc libc)
+configure_windows_unwind(agc_semaphore_tests)
+if(BUILD_TESTING)
+    set_target_properties(agc_semaphore_tests PROPERTIES EXCLUDE_FROM_ALL FALSE)
+    add_test(NAME agc_semaphore_tests COMMAND agc_semaphore_tests)
+    if(WIN32)
+        set_tests_properties(agc_semaphore_tests PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
     endif()
 endif()
@@ -209,14 +225,15 @@ if(BUILD_TESTING)
 endif()
 
 add_test_executable(agc_shader_fusion_tests EXCLUDE_FROM_ALL tests/ShaderFusion.cpp)
-target_include_directories(agc_shader_fusion_tests PRIVATE ${LIBS_INCLUDE_DIR})
-target_link_libraries(agc_shader_fusion_tests PRIVATE libSceAgc libc)
+target_include_directories(agc_shader_fusion_tests PRIVATE ${LIBS_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/core/shader/recompiler ${ANYPS5_VULKAN_HEADERS_INCLUDE_DIR} ${ANYPS5_SPIRV_HEADERS_INCLUDE_DIR})
+target_link_libraries(agc_shader_fusion_tests PRIVATE libSceAgc libSceAgcDriver libc)
 set_target_properties(agc_shader_fusion_tests PROPERTIES CXX_EXTENSIONS OFF)
 configure_windows_unwind(agc_shader_fusion_tests)
 
 if(BUILD_TESTING)
     set_target_properties(agc_shader_fusion_tests PROPERTIES EXCLUDE_FROM_ALL OFF)
     add_test(NAME agc_shader_fusion COMMAND agc_shader_fusion_tests)
+    set_tests_properties(agc_shader_fusion PROPERTIES SKIP_RETURN_CODE 77)
     if(WIN32)
         set_tests_properties(agc_shader_fusion PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
@@ -236,9 +253,13 @@ if(BUILD_TESTING)
     endif()
 endif()
 
-add_test_executable(agc_interpolant_mapping_tests EXCLUDE_FROM_ALL tests/InterpolantMapping.cpp)
+add_test_executable(agc_interpolant_mapping_tests EXCLUDE_FROM_ALL
+        tests/InterpolantMapping.cpp
+        Shader/src/InterpolantMapping.cpp
+        Shader/src/ShaderUtils.cpp
+)
 target_include_directories(agc_interpolant_mapping_tests PRIVATE ${LIBS_INCLUDE_DIR})
-target_link_libraries(agc_interpolant_mapping_tests PRIVATE libSceAgc libc)
+target_link_libraries(agc_interpolant_mapping_tests PRIVATE libSceAgcDriver libc)
 set_target_properties(agc_interpolant_mapping_tests PROPERTIES CXX_EXTENSIONS OFF)
 configure_windows_unwind(agc_interpolant_mapping_tests)
 
@@ -252,9 +273,15 @@ if(BUILD_TESTING)
 endif()
 
 if(BUILD_TESTING)
-    add_test_executable(guest_shader_link_tests ${LIBS_INCLUDE_DIR}/tests/GuestShaderLink.cpp)
+    add_test_executable(guest_shader_link_tests
+            ${LIBS_INCLUDE_DIR}/tests/GuestShaderLink.cpp
+            Shader/src/LinkShaders.cpp
+            Shader/src/PrimState.cpp
+            Shader/src/InterpolantMapping.cpp
+            Shader/src/ShaderUtils.cpp
+    )
     target_include_directories(guest_shader_link_tests PRIVATE ${LIBS_INCLUDE_DIR})
-    target_link_libraries(guest_shader_link_tests PRIVATE libSceAgc libc)
+    target_link_libraries(guest_shader_link_tests PRIVATE libSceAgc libSceAgcDriver libc)
     configure_windows_unwind(guest_shader_link_tests)
     add_test(NAME guest_shader_link COMMAND guest_shader_link_tests)
     if(WIN32)
@@ -275,6 +302,22 @@ if(BUILD_TESTING)
     add_test(NAME agc_gs_oversubscription_tests COMMAND agc_gs_oversubscription_tests)
     if(WIN32)
         set_tests_properties(agc_gs_oversubscription_tests PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
+    endif()
+endif()
+
+add_test_executable(agc_gs_prim_payload_tests EXCLUDE_FROM_ALL
+        tests/GsPrimPayload.cpp
+        Shader/src/GsPrimPayload.cpp
+)
+target_include_directories(agc_gs_prim_payload_tests PRIVATE ${LIBS_INCLUDE_DIR})
+target_link_libraries(agc_gs_prim_payload_tests PRIVATE libc)
+configure_windows_unwind(agc_gs_prim_payload_tests)
+if(BUILD_TESTING)
+    set_target_properties(agc_gs_prim_payload_tests PROPERTIES EXCLUDE_FROM_ALL FALSE)
+    add_test(NAME agc_gs_prim_payload_tests COMMAND agc_gs_prim_payload_tests)
+    if(WIN32)
+        set_tests_properties(agc_gs_prim_payload_tests PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
     endif()
 endif()
@@ -355,6 +398,25 @@ if(BUILD_TESTING)
     add_test(NAME agc_cond_exec_patch_tests COMMAND agc_cond_exec_patch_tests)
     if(WIN32)
         set_tests_properties(agc_cond_exec_patch_tests PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
+    endif()
+endif()
+
+add_test_executable(agc_shader_helpers_tests EXCLUDE_FROM_ALL
+        tests/ShaderHelpers.cpp
+        Shader/src/LinkShaders.cpp
+        Shader/src/PrimState.cpp
+        Shader/src/InterpolantMapping.cpp
+        Shader/src/ShaderUtils.cpp
+)
+target_include_directories(agc_shader_helpers_tests PRIVATE ${LIBS_INCLUDE_DIR})
+target_link_libraries(agc_shader_helpers_tests PRIVATE libc libSceAgcDriver)
+configure_windows_unwind(agc_shader_helpers_tests)
+if(BUILD_TESTING)
+    set_target_properties(agc_shader_helpers_tests PROPERTIES EXCLUDE_FROM_ALL FALSE)
+    add_test(NAME agc_shader_helpers COMMAND agc_shader_helpers_tests)
+    if(WIN32)
+        set_tests_properties(agc_shader_helpers PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
     endif()
 endif()

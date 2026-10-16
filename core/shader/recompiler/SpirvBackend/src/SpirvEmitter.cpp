@@ -118,7 +118,7 @@ std::uint32_t SpirvValueEmitContext::Ballot(const IrValue* predicate) {
     const auto ballotType = TypeU32Vector(state, 4u);
     const auto scope = ConstantU32(state, spv::ScopeSubgroup);
     const auto low = state.module.AllocateId();
-    state.module.AddFunction(spv::OpGroupNonUniformBallot, ballotType, low, scope, otherHalf == nullptr || half == 0u ? Def(predicate) : otherHalf->Def(predicate));
+    EmitSubgroupBallot(state, low, otherHalf == nullptr || half == 0u ? Def(predicate) : otherHalf->Def(predicate));
     if (otherHalf == nullptr) {
         return EmitWaveBallot(state, low);
     }
@@ -136,7 +136,7 @@ std::uint32_t SpirvValueEmitContext::Ballot(const IrValue* predicate) {
 std::uint32_t SpirvValueEmitContext::FirstLane(std::uint32_t ballot) {
     if (otherHalf == nullptr) {
         const auto result = state.module.AllocateId();
-        state.module.AddFunction(spv::OpGroupNonUniformBallotFindLSB, TypeU32(state), result, ConstantU32(state, spv::ScopeSubgroup), ballot);
+        EmitSubgroupBallotFindLsb(state, result, ballot);
         return result;
     }
     const auto low = state.module.AllocateId();
@@ -159,7 +159,7 @@ std::uint32_t SpirvValueEmitContext::Shuffle(const IrValue& inst, std::size_t in
     const auto scope = ConstantU32(state, spv::ScopeSubgroup);
     const auto low = state.module.AllocateId();
     if (otherHalf == nullptr) {
-        state.module.AddFunction(spv::OpGroupNonUniformShuffle, type, low, scope, Arg(inst, index), EmitHostSubgroupLane(state, lane));
+        EmitSubgroupShuffle(state, type, low, Arg(inst, index), EmitHostSubgroupLane(state, lane));
         return low;
     }
     const auto physicalLane = EmitBinaryU32(state, spv::OpBitwiseAnd, lane, ConstantU32(state, 31u));
@@ -229,11 +229,11 @@ std::uint32_t SpirvValueEmitContext::Label(const IrBlock* block) const {
     throw std::runtime_error("SPIR-V emission failed: hash=0x" + std::to_string(state.program.Resources().shaderHash) + " stage=" + std::to_string(static_cast<unsigned>(state.program.Resources().stage)) + " opcode=" + std::string(IrOpcodeName(inst.Opcode())) + " reason=" + reason);
 }
 
-std::vector<std::uint32_t> SpirvEmitter::Emit(const IrProgram& program, const BindingAllocationResult& bindings, const SpirvTargetOptions& target) const {
+std::vector<std::uint32_t> SpirvEmitter::Emit(const IrProgram& program, const CompiledBindingLayout& bindings, const SpirvTargetOptions& target) const {
     return Emit(program, ShaderStageInputInfo {}, bindings, target);
 }
 
-std::vector<std::uint32_t> SpirvEmitter::Emit(const IrProgram& program, const ShaderStageInputInfo& inputInfo, const BindingAllocationResult& bindings, const SpirvTargetOptions& target) const {
+std::vector<std::uint32_t> SpirvEmitter::Emit(const IrProgram& program, const ShaderStageInputInfo& inputInfo, const CompiledBindingLayout& bindings, const SpirvTargetOptions& target) const {
     if (program.Resources().stage != IrShaderStage::Compute && program.Resources().stage != IrShaderStage::Vertex && program.Resources().stage != IrShaderStage::Pixel && program.Resources().stage != IrShaderStage::Mesh && program.Resources().stage != IrShaderStage::Local && program.Resources().stage != IrShaderStage::TessellationControl && program.Resources().stage != IrShaderStage::TessellationEvaluation) {
         FailProgram(program, "binary SPIR-V emitter received an unsupported shader stage");
     }
@@ -248,7 +248,17 @@ std::vector<std::uint32_t> SpirvEmitter::Emit(const IrProgram& program, const Sh
     state.supportedCapabilities = target.supportedCapabilities;
     state.supportedExtensions = target.supportedExtensions;
     state.nonConstantImageOffsets = target.nonConstantImageOffsets;
+    state.narrowSubgroupClock = target.narrowSubgroupClock;
+    state.float64DenormPreserve = target.float64DenormPreserve;
+    state.registrationModules = target.registrationModules;
+    state.fragmentDescriptorSet = target.fragmentDescriptorSet;
+    state.float16DenormPreserve = target.float16DenormPreserve;
     state.hostSubgroupSize = target.subgroupSize;
+    if (HostSubgroupSingleLane(state)) {
+        state.requirements.subgroupBallot = false;
+        state.requirements.subgroupShuffle = false;
+        state.requirements.subgroupLocalInvocationId = false;
+    }
     state.splitSubgroup = program.WaveSize() == 32u && target.subgroupSize > 32u;
     if (state.splitSubgroup && (state.requirements.subgroupBallot || state.requirements.subgroupShuffle)) state.requirements.subgroupLocalInvocationId = true;
     const auto* workgroup = ShaderWorkgroupInputFor(state);

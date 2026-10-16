@@ -8,6 +8,7 @@
 #include <thread>
 
 extern "C" {
+int* APS5_VABI __error_nid_postfix();
 void* APS5_VABI sceLibcMspaceCreate_nid_postfix(const char*, void*, std::size_t, unsigned);
 int APS5_VABI sceLibcMspaceDestroy_nid_postfix(void*);
 void* APS5_VABI sceLibcMspaceMalloc_nid_postfix(void*, std::size_t);
@@ -17,6 +18,7 @@ void APS5_VABI sceLibcMspaceFree_nid_postfix(void*, void*);
 int APS5_VABI sceLibcMspacePosixMemalign_nid_postfix(void*, void**, std::size_t, std::size_t);
 std::size_t APS5_VABI sceLibcMspaceMallocUsableSize_nid_postfix(const void*);
 void* APS5_VABI sceLibcMspaceMemalign_nid_postfix(void*, std::size_t, std::size_t);
+void* APS5_VABI sceLibcMspaceAlignedAlloc_nid_postfix(void*, std::size_t, std::size_t);
 void* APS5_VABI sceLibcMspaceReallocalign_nid_postfix(void*, void*, std::size_t, std::size_t);
 int APS5_VABI sceLibcMspaceMallocStats_nid_postfix(void*, void*);
 int APS5_VABI sceLibcMspaceMallocStatsFast_nid_postfix(void*, void*);
@@ -33,7 +35,81 @@ struct MallocManagedSize {
 static void Require(bool value) {
     if (!value) { std::fputs("Mspace check failed\n", stderr); std::abort(); }
 }
+static void CheckAlignment() {
+    alignas(32) static std::array<unsigned char, 65536 + 16> storage{};
+    void* arena = sceLibcMspaceCreate_nid_postfix("aligned", storage.data() + 16, 65536, 0);
+    Require(arena != nullptr);
+    const auto aligned = [](const void* pointer) { return pointer && (reinterpret_cast<std::uintptr_t>(pointer) & 31u) == 0; };
+    void* blocks[64] = {};
+    for (std::size_t index = 0; index < 64; ++index) {
+        blocks[index] = sceLibcMspaceMalloc_nid_postfix(arena, index + 1);
+        Require(aligned(blocks[index]));
+        std::memset(blocks[index], 0xa5, index + 1);
+    }
+    void* zeroed = sceLibcMspaceCalloc_nid_postfix(arena, 3, 13);
+    Require(aligned(zeroed));
+    blocks[0] = sceLibcMspaceRealloc_nid_postfix(arena, blocks[0], 600);
+    Require(aligned(blocks[0]));
+    void* small = sceLibcMspaceMemalign_nid_postfix(arena, 16, 40);
+    Require(aligned(small));
+    void* moved = sceLibcMspaceReallocalign_nid_postfix(arena, nullptr, 40, 8);
+    Require(aligned(moved));
+    void* posix = nullptr;
+    Require(sceLibcMspacePosixMemalign_nid_postfix(arena, &posix, 8, 40) == 0 && aligned(posix));
+    for (void* block : blocks) sceLibcMspaceFree_nid_postfix(arena, block);
+    for (void* block : {zeroed, small, moved, posix}) sceLibcMspaceFree_nid_postfix(arena, block);
+    Require(sceLibcMspaceDestroy_nid_postfix(arena) == 0);
+}
+static void CheckAdjacentBlocks() {
+    alignas(32) static std::array<unsigned char, 65536> storage{};
+    void* arena = sceLibcMspaceCreate_nid_postfix("adjacent", storage.data(), storage.size(), 0);
+    Require(arena != nullptr);
+    const auto end = [](void* block) { return static_cast<unsigned char*>(block) + sceLibcMspaceMallocUsableSize_nid_postfix(block); };
+    std::array<void*, 96> blocks{};
+    for (std::size_t index = 0; index < blocks.size(); ++index) {
+        blocks[index] = sceLibcMspaceMalloc_nid_postfix(arena, index % 48 + 1);
+        Require(blocks[index] != nullptr);
+        if (index > 0) Require(blocks[index] == end(blocks[index - 1]));
+    }
+    void* last = blocks.back();
+    Require(sceLibcMspaceRealloc_nid_postfix(arena, last, 80) == last);
+    void* after = sceLibcMspaceMalloc_nid_postfix(arena, 16);
+    Require(after == end(last));
+    MallocManagedSize stats{sizeof(MallocManagedSize), 1, 0, 0, 0, 0, 0};
+    Require(sceLibcMspaceMallocStats_nid_postfix(arena, &stats) == 0);
+    Require(stats.currentInuseSize == static_cast<std::size_t>(end(after) - static_cast<unsigned char*>(blocks[0])));
+    Require(sceLibcMspaceDestroy_nid_postfix(arena) == 0);
+}
+static void CheckMovedBlockKeepsUsableBytes() {
+    alignas(32) static std::array<unsigned char, 65536> storage{};
+    void* arena = sceLibcMspaceCreate_nid_postfix("moved", storage.data(), storage.size(), 0);
+    Require(arena != nullptr);
+    const auto fill = [](void* block) {
+        const auto usable = sceLibcMspaceMallocUsableSize_nid_postfix(block);
+        Require(usable > 1);
+        for (std::size_t index = 0; index < usable; ++index) static_cast<unsigned char*>(block)[index] = static_cast<unsigned char>(index + 1);
+        return usable;
+    };
+    const auto kept = [](const void* block, std::size_t usable) {
+        for (std::size_t index = 0; index < usable; ++index) if (static_cast<const unsigned char*>(block)[index] != static_cast<unsigned char>(index + 1)) return false;
+        return true;
+    };
+    void* block = sceLibcMspaceMalloc_nid_postfix(arena, 1);
+    const auto usable = fill(block);
+    Require(sceLibcMspaceMalloc_nid_postfix(arena, 1) != nullptr);
+    void* moved = sceLibcMspaceRealloc_nid_postfix(arena, block, 4096);
+    Require(moved != nullptr && moved != block && kept(moved, usable));
+    void* other = sceLibcMspaceMalloc_nid_postfix(arena, 1);
+    const auto otherUsable = fill(other);
+    Require(sceLibcMspaceMalloc_nid_postfix(arena, 1) != nullptr);
+    void* realigned = sceLibcMspaceReallocalign_nid_postfix(arena, other, 4096, 256);
+    Require(realigned != nullptr && realigned != other && kept(realigned, otherUsable));
+    Require(sceLibcMspaceDestroy_nid_postfix(arena) == 0);
+}
 int main() {
+    CheckAlignment();
+    CheckAdjacentBlocks();
+    CheckMovedBlockKeepsUsableBytes();
     alignas(16) std::array<unsigned char, 65536> storage{};
     void* arena = sceLibcMspaceCreate_nid_postfix("test", storage.data(), storage.size(), 0);
     Require(arena != nullptr);
@@ -42,6 +118,23 @@ int main() {
     Require(first > storage.data() && first + 128 <= storage.data() + storage.size());
     for (int i = 0; i < 128; ++i) { Require(first[i] == 0); first[i] = static_cast<unsigned char>(i); }
     void* blocker = sceLibcMspaceMalloc_nid_postfix(arena, 128);
+    MallocManagedSize beforeOverflow{sizeof(MallocManagedSize), 1, 0, 0, 0, 0, 0};
+    Require(sceLibcMspaceMallocStats_nid_postfix(arena, &beforeOverflow) == 0);
+    for (std::size_t delta = 0; delta < 16; ++delta) {
+        const auto size = std::numeric_limits<std::size_t>::max() - delta;
+        *__error_nid_postfix() = 0;
+        Require(sceLibcMspaceRealloc_nid_postfix(arena, first, size) == nullptr);
+        Require(*__error_nid_postfix() == 12);
+        *__error_nid_postfix() = 0;
+        Require(sceLibcMspaceReallocalign_nid_postfix(arena, first, size, 16) == nullptr);
+        Require(*__error_nid_postfix() == 12);
+        Require(sceLibcMspaceMallocUsableSize_nid_postfix(first) == 128);
+        for (int i = 0; i < 128; ++i) Require(first[i] == i);
+        MallocManagedSize afterOverflow{sizeof(MallocManagedSize), 1, 0, 0, 0, 0, 0};
+        Require(sceLibcMspaceMallocStats_nid_postfix(arena, &afterOverflow) == 0);
+        Require(afterOverflow.currentInuseSize == beforeOverflow.currentInuseSize);
+        Require(afterOverflow.maxInuseSize == beforeOverflow.maxInuseSize);
+    }
     auto* grown = static_cast<unsigned char*>(sceLibcMspaceRealloc_nid_postfix(arena, first, 4096));
     Require(grown && grown != first);
     for (int i = 0; i < 128; ++i) Require(grown[i] == i);
@@ -95,6 +188,9 @@ int main() {
     void* memaligned = sceLibcMspaceMemalign_nid_postfix(arena, 256, 100);
     Require(memaligned && (reinterpret_cast<std::uintptr_t>(memaligned) & 255) == 0);
     Require(sceLibcMspaceMemalign_nid_postfix(arena, 24, 100) == nullptr);
+    void* alignedAlloc = sceLibcMspaceAlignedAlloc_nid_postfix(arena, 128, 256);
+    Require(alignedAlloc && (reinterpret_cast<std::uintptr_t>(alignedAlloc) & 127) == 0);
+    Require(sceLibcMspaceAlignedAlloc_nid_postfix(arena, 24, 100) == nullptr);
     unsigned char* realigned = static_cast<unsigned char*>(sceLibcMspaceReallocalign_nid_postfix(arena, nullptr, 64, 64));
     Require(realigned && (reinterpret_cast<std::uintptr_t>(realigned) & 63) == 0);
     for (int i = 0; i < 64; ++i) realigned[i] = static_cast<unsigned char>(i + 1);

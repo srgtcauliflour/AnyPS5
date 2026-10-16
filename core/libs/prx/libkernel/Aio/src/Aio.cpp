@@ -6,17 +6,15 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include "SceTypes.hpp"
 #include "prx/libc/include/General.hpp"
 #include "prx/libc/include/GuestArena.hpp"
+#include "prx/libc/include/PreciseWait.hpp"
+#include "prx/libkernel/File/include/File.hpp"
+#include "prx/libkernel/File/include/SharedMemory.hpp"
 #include "prx/libkernel/KernelErrors.hpp"
 
-#ifdef _WIN32
-#include <fcntl.h>
-#include <io.h>
-#include <limits>
-#else
+#ifndef _WIN32
 #include <fcntl.h>
 #include <unistd.h>
 #endif
@@ -31,6 +29,10 @@ constexpr std::int32_t AioRequestNumMax = 128;
 constexpr std::int32_t AioIdNumMax = 128;
 constexpr std::uint32_t AioWaitAnd = 1;
 constexpr std::uint32_t AioWaitOr = 2;
+constexpr std::int32_t AioSchedulingWindowMax = 128;
+constexpr std::int32_t AioDelayedCountMax = 128;
+constexpr std::uint32_t AioSplitSizeMax = 0x1000000;
+constexpr std::uint32_t AioSplitChunkSizeMax = 0x1000000;
 
 std::mutex g_mutex;
 std::array<std::int32_t, AioMaxQueues> g_states{};
@@ -61,22 +63,11 @@ std::int64_t NativePread(std::int32_t fd, void* buf, std::size_t nbyte, std::int
         return -1;
     }
 #ifdef _WIN32
-    if (nbyte > static_cast<std::size_t>(std::numeric_limits<unsigned int>::max())) {
-        throw std::runtime_error("sceKernelAioSubmitReadCommands: nbytes exceeds platform limit");
-    }
-    const int duped = ::_dup(fd);
-    if (duped < 0) return -1;
-    if (::_lseeki64(duped, offset, SEEK_SET) < 0) {
-        const int error = errno;
-        ::_close(duped);
-        errno = error;
+    if (offset < 0) {
+        errno = EINVAL;
         return -1;
     }
-    const int result = ::_read(duped, buf, static_cast<unsigned int>(nbyte));
-    const int error = errno;
-    ::_close(duped);
-    errno = error;
-    return result;
+    return NativePositioned_nid_no_patch(fd, buf, nbyte, offset, false);
 #else
     return static_cast<std::int64_t>(::pread(fd, buf, nbyte, static_cast<off_t>(offset)));
 #endif
@@ -84,24 +75,14 @@ std::int64_t NativePread(std::int32_t fd, void* buf, std::size_t nbyte, std::int
 
 std::int64_t NativePwrite(std::int32_t fd, const void* buf, std::size_t nbyte, std::int64_t offset) {
 #ifdef _WIN32
-    if (nbyte > static_cast<std::size_t>(std::numeric_limits<unsigned int>::max())) {
-        throw std::runtime_error("sceKernelAioSubmitWriteCommands: nbytes exceeds platform limit");
-    }
-    const int duped = ::_dup(fd);
-    if (duped < 0) return -1;
-    if (::_lseeki64(duped, offset, SEEK_SET) < 0) {
-        const int error = errno;
-        ::_close(duped);
-        errno = error;
+    if (offset < 0) {
+        errno = EINVAL;
         return -1;
     }
-    const int result = ::_write(duped, buf, static_cast<unsigned int>(nbyte));
-    const int error = errno;
-    ::_close(duped);
-    errno = error;
-    return result;
+    return NativePositioned_nid_no_patch(fd, const_cast<void*>(buf), nbyte, offset, true);
 #else
-    return static_cast<std::int64_t>(::pwrite(fd, buf, nbyte, static_cast<off_t>(offset)));
+    const auto result = File::PwriteSharedMemory_nid_no_patch(fd, buf, nbyte, offset);
+    return result == -2 ? static_cast<std::int64_t>(::pwrite(fd, buf, nbyte, static_cast<off_t>(offset))) : result;
 #endif
 }
 
@@ -114,6 +95,7 @@ bool RunRequest(KernelAioRwRequest& req, bool write) {
         req.result->return_value = static_cast<std::int64_t>(SCE_KERNEL_ERROR_EIO);
         if (error == EBADF) req.result->return_value = static_cast<std::int64_t>(SCE_KERNEL_ERROR_EBADF);
         if (error == EFAULT) req.result->return_value = static_cast<std::int64_t>(SCE_KERNEL_ERROR_EFAULT);
+        if (error == EINVAL) req.result->return_value = static_cast<std::int64_t>(SCE_KERNEL_ERROR_EINVAL);
         req.result->state = AioAborted;
         return false;
     }
@@ -228,6 +210,20 @@ void APS5_VABI sceKernelAioInitializeParam(void* param) {
     if (param == nullptr) throw std::invalid_argument("sceKernelAioInitializeParam: param is null");
 }
 
+int APS5_VABI sceKernelAioSetParam(KernelAioSchedulingParam* param, int32_t schedulingWindowSize, int32_t delayedCountLimit, uint32_t enableSplit, uint32_t splitSize, uint32_t splitChunkSize) {
+    if (param == nullptr) throw std::invalid_argument("sceKernelAioSetParam: param is null");
+    if (schedulingWindowSize < 0 || schedulingWindowSize > AioSchedulingWindowMax) throw std::runtime_error("sceKernelAioSetParam: a scheduling window outside 0..128 is not modelled");
+    if (delayedCountLimit < 0 || delayedCountLimit > AioDelayedCountMax) throw std::runtime_error("sceKernelAioSetParam: a delayed count limit outside 0..128 is not modelled");
+    if (enableSplit > 1) throw std::runtime_error("sceKernelAioSetParam: a split flag other than 0 or 1 is not modelled");
+    if (splitSize > AioSplitSizeMax || splitChunkSize > AioSplitChunkSizeMax) throw std::runtime_error("sceKernelAioSetParam: a split size above 0x1000000 is not modelled");
+    param->schedulingWindowSize = schedulingWindowSize;
+    param->delayedCountLimit = delayedCountLimit;
+    param->enableSplit = enableSplit;
+    param->splitSize = splitSize;
+    param->splitChunkSize = splitChunkSize;
+    return 0;
+}
+
 int APS5_VABI sceKernelAioSubmitReadCommands(KernelAioRwRequest* req, int32_t size, int32_t prio, int32_t* id) {
     (void)prio;
     return SubmitCommands(req, size, false, id);
@@ -277,7 +273,7 @@ int APS5_VABI sceKernelAioWaitRequests(int32_t* id, int32_t num, int32_t* state,
             const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
             if (elapsed > static_cast<std::int64_t>(*usec)) return SCE_KERNEL_ERROR_ETIMEDOUT;
         }
-        std::this_thread::sleep_for(std::chrono::microseconds(10));
+        PreciseSleepUs(10);
     }
 }
 
@@ -302,12 +298,15 @@ int APS5_VABI sceKernelAioWaitRequest(int32_t id, int32_t* state, uint32_t* usec
                 return SCE_KERNEL_ERROR_ETIMEDOUT;
             }
         }
-        std::this_thread::sleep_for(std::chrono::microseconds(10));
+        PreciseSleepUs(10);
     }
 }
 
-int APS5_VABI sceKernelAioPollRequests() {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceKernelAioPollRequests(int32_t* id, int32_t num, int32_t* state) {
+    const int error = ValidateIds(id, num, state, "sceKernelAioPollRequests");
+    if (error != 0) return error;
+    std::lock_guard<std::mutex> lock(g_mutex);
+    for (int32_t i = 0; i < num; ++i) state[i] = g_states[id[i]];
     return 0;
 }
 

@@ -13,7 +13,13 @@ static std::string _jsonString(const std::string& s) {
         else if (c == '\n') out += "\\n";
         else if (c == '\r') out += "\\r";
         else if (c == '\t') out += "\\t";
-        else out.push_back(c);
+        else if (static_cast<unsigned char>(c) < 0x20) {
+            constexpr char digits[] = "0123456789abcdef";
+            const auto value = static_cast<unsigned char>(c);
+            out += "\\u00";
+            out.push_back(digits[value >> 4]);
+            out.push_back(digits[value & 0x0f]);
+        } else out.push_back(c);
     }
     out.push_back('"');
     return out;
@@ -46,12 +52,44 @@ std::string CallRegistryWriter::WriteCallRegistry(const std::vector<CallRegistry
         }
 
         out << "],\n";
-        out << "    \"callSitesResolved\": " << (e.CallSitesResolved ? "true" : "false") << "\n";
+        out << "    \"callSitesResolved\": " << (e.CallSitesResolved ? "true" : "false") << ",\n";
+        out << "    \"weak\": " << (e.Weak ? "true" : "false") << "\n";
         out << "  }";
         if (i + 1 < entries.size()) out << ",";
         out << "\n";
     }
 
+    out << "]\n";
+    return out.str();
+}
+
+std::string CallRegistryWriter::WriteModuleImports(const std::vector<CallRegistryEntry>& entries) {
+    std::ostringstream out;
+    out << "[\n";
+
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        const auto& e = entries[i];
+        out << "  {\n";
+        out << "    \"nid\": " << _jsonString(e.Nid) << ",\n";
+        out << "    \"library\": " << _jsonString(e.Library) << ",\n";
+        out << "    \"targetOffset\": " << _hexOffset(e.TargetOffset) << "\n";
+        out << "  }";
+        if (i + 1 < entries.size()) out << ",";
+        out << "\n";
+    }
+
+    out << "]\n";
+    return out.str();
+}
+
+std::string CallRegistryWriter::WriteNeededLibraries(const std::vector<std::string>& libraries) {
+    std::ostringstream out;
+    out << "[\n";
+    for (std::size_t index = 0; index < libraries.size(); ++index) {
+        out << "  " << _jsonString(libraries[index]);
+        if (index + 1 < libraries.size()) out << ",";
+        out << "\n";
+    }
     out << "]\n";
     return out.str();
 }

@@ -1,3 +1,4 @@
+#include "RdnaDecoder/RdnaDescriptorFormat.hpp"
 #include "SpirvBackend/SpirvMemory/SpirvInputOutput.hpp"
 #include "SpirvBackend/SpirvEmitterHelpers.hpp"
 #include "SpirvBackend/SpirvMemory/SpirvTypes.hpp"
@@ -27,7 +28,7 @@ namespace ShaderRecompiler
             if (input >= PixelParameterLimit || input >= info.inputNum) {
                 FailEmit("pixel interpolator index is out of range");
             }
-            if (info.InputIsDefault(input)) {
+            if (info.InputIsDefault(input) && (!info.InputIsFp16(input) || info.InputHalfIsDefault(input, true))) {
                 FailEmit("pixel input " + std::to_string(input) + " reads a default value, not a parameter");
             }
             return info.InputSlot(input);
@@ -47,11 +48,27 @@ namespace ShaderRecompiler
         if (inputInfo.pixel == nullptr) FailEmit("pixel input info is missing");
         const auto& pixel = *inputInfo.pixel;
         std::vector<FragmentParameter> result;
+        std::array<bool, 32> readsP10{};
+        for (const auto& block : program.Blocks()) {
+            for (const auto* instruction : block->Instructions()) {
+                if (instruction->Opcode() != IrOpcode::GetInterpolationParameter || instruction->Argument(2)->Resolve()->ImmediateU32() != 0u) continue;
+                const auto attribute = instruction->Argument(0)->Resolve()->ImmediateU32();
+                if (attribute < readsP10.size()) readsP10[attribute] = true;
+            }
+        }
         for (const auto& input : program.Info().inputs) {
             if (input.kind != StageInputKind::Parameter) continue;
             const auto location = PixelInputLocation(pixel, input.location);
-            if (std::any_of(result.begin(), result.end(), [&](const auto& parameter) { return parameter.location == location; })) continue;
-            result.push_back({location, location, PixelInputIsFlat(pixel, input.location), input.perVertex, PixelInputIsCustom(pixel, input.location)});
+            const bool flat = PixelInputIsFlat(pixel, input.location);
+            const bool flatP10 = flat && !input.perVertex && input.location < readsP10.size() && readsP10[input.location];
+            const bool vertexOrder = input.perVertex && (input.location >= 32u || (program.Metadata().pixelVertexOrderInputs >> input.location & 1u) != 0u);
+            const auto existing = std::find_if(result.begin(), result.end(), [&](const auto& parameter) { return parameter.location == location; });
+            if (existing != result.end()) {
+                existing->flatP10 = existing->flatP10 || flatP10;
+                existing->vertexOrder = existing->vertexOrder || vertexOrder;
+                continue;
+            }
+            result.push_back({location, location, flat, input.perVertex, PixelInputIsCustom(pixel, input.location), flatP10, vertexOrder});
         }
         return result;
     }
@@ -88,29 +105,10 @@ namespace ShaderRecompiler
         if (location >= static_cast<std::uint32_t>(ShaderVertexInputInfo::MaxResources) || location >= static_cast<std::uint32_t>(vertex.resourcesNum)) {
             return VertexInputScalarKind::Float;
         }
-        switch (vertex.resources[location].Format()) {
-        case IrBufferFormat::Format8UInt:
-        case IrBufferFormat::Format16UInt:
-        case IrBufferFormat::Format8_8UInt:
-        case IrBufferFormat::Format32UInt:
-        case IrBufferFormat::Format16_16UInt:
-        case IrBufferFormat::Format8_8_8_8UInt:
-        case IrBufferFormat::Format32_32UInt:
-        case IrBufferFormat::Format16_16_16_16UInt:
-        case IrBufferFormat::Format32_32_32UInt:
-        case IrBufferFormat::Format32_32_32_32UInt: return VertexInputScalarKind::Uint;
-        case IrBufferFormat::Format8SInt:
-        case IrBufferFormat::Format16SInt:
-        case IrBufferFormat::Format8_8SInt:
-        case IrBufferFormat::Format32SInt:
-        case IrBufferFormat::Format16_16SInt:
-        case IrBufferFormat::Format8_8_8_8SInt:
-        case IrBufferFormat::Format32_32SInt:
-        case IrBufferFormat::Format16_16_16_16SInt:
-        case IrBufferFormat::Format32_32_32SInt:
-        case IrBufferFormat::Format32_32_32_32SInt: return VertexInputScalarKind::Sint;
-        default: return VertexInputScalarKind::Float;
-        }
+        const auto numeric = VertexInputNumericClass(vertex.resources[location].Format());
+        if (numeric == IrTextureNumericClass::Uint) return VertexInputScalarKind::Uint;
+        if (numeric == IrTextureNumericClass::Sint) return VertexInputScalarKind::Sint;
+        return VertexInputScalarKind::Float;
     }
 
     std::uint32_t VertexParameterComponentCount(const SpirvInputBinding& input) {
@@ -149,6 +147,10 @@ namespace ShaderRecompiler
             }
         }
         return 0;
+    }
+
+    bool OrderedPixelShader(const SpirvEmitterState& state) {
+        return state.program.Resources().stage == IrShaderStage::Pixel && state.inputInfo.pixel != nullptr && state.inputInfo.pixel->psOrderedPixelShader;
     }
 
     const SpirvInputBinding* SpirvInputBindingForParameter(const SpirvEmitterState& state, std::uint32_t location) {

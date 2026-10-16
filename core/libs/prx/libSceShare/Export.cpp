@@ -105,18 +105,26 @@ int APS5_VABI sceShareCaptureScreenshotExtended(const void* extended_param, int3
 }
 
 
-int APS5_VABI sceShareCaptureVideoClipExtended(void) {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceShareCaptureVideoClipExtended(const void* extended_param, int32_t* req_id) {
+    (void)extended_param;
+    if (req_id != nullptr) {
+        *req_id = REQUEST_ID_INVALID;
+    }
+    return ERROR_NOT_SUPPORTED;
+}
+
+int APS5_VABI sceShareGetRunningStatus(uint32_t* status) {
+    if (status == nullptr) {
+        return ERROR_INVALID_PARAM;
+    }
+    *status = 0;
     return 0;
 }
 
-int APS5_VABI sceShareGetRunningStatus(void) {
-    NotImplemented_nid_no_patch(__func__);
-    return 0;
-}
-
-int APS5_VABI sceShareSetContentParamForApplicationTitle(void) {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI sceShareSetContentParamForApplicationTitle(const char* application_title) {
+    if (application_title == nullptr) {
+        return ERROR_INVALID_PARAM;
+    }
     return 0;
 }
 

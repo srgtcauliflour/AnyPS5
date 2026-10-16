@@ -66,12 +66,21 @@ constexpr std::array<std::uint32_t, 9> SamplerCode(std::uint32_t word0) {
     };
 }
 
+constexpr std::array<std::uint32_t, 15> MixedSamplerCode(std::uint32_t word0) {
+    return {
+        0x34060084u, 0x7e280280u, 0x7e2a0280u, 0x7e2c0280u, 0xf0bc0108u, 0x00610a14u, 0xbf8c3f70u,
+        0xe0701000u, 0x80000a03u, word0, 0x00610a14u, 0xbf8c3f70u, 0xe0701004u, 0x80000a03u, 0xbf810000u,
+    };
+}
+
 alignas(256) constexpr auto LoadXyzw = LoadCode(0xfu);
 alignas(256) constexpr auto LoadXy = LoadCode(0x3u);
 alignas(256) constexpr auto StoreX = StoreCode(0x1u);
 alignas(256) constexpr auto StoreXy = StoreCode(0x3u);
 alignas(256) constexpr auto SampleLz = SamplerCode(0xf09c0f08u);
 alignas(256) constexpr auto Gather4Lz = SamplerCode(0xf11c0108u);
+alignas(256) constexpr auto MixedSampleLz = MixedSamplerCode(0xf09c0f08u);
+alignas(256) constexpr auto MixedGather4Lz = MixedSamplerCode(0xf11c0108u);
 
 class GuestBlock {
 public:
@@ -82,7 +91,7 @@ public:
         block = static_cast<std::uint8_t*>(std::aligned_alloc(BlockBytes, BlockBytes));
 #endif
         Require(block != nullptr, "image sRGB load: cannot allocate the guest block");
-        GuestAllocations::Mutation().Add(block, BlockBytes, true, true);
+        GuestAllocations::Mutation().Add(block, BlockBytes, true, true, true);
     }
 
     ~GuestBlock() {
@@ -119,7 +128,7 @@ std::uint32_t Linear(std::uint32_t code) {
 
 std::array<std::uint32_t, 4> BufferDescriptor(const void* data, std::uint32_t bytes) {
     const auto address = reinterpret_cast<std::uintptr_t>(data);
-    return {static_cast<std::uint32_t>(address), static_cast<std::uint32_t>((address >> 32u) & 0xffffu), bytes, 0x01016facu};
+    return {static_cast<std::uint32_t>(address), static_cast<std::uint32_t>((address >> 32u) & 0xffffu), bytes, 0x31016facu};
 }
 
 std::array<std::uint32_t, 8> TextureDescriptor(const void* texels, std::uint32_t format, std::uint32_t swizzle) {
@@ -147,7 +156,7 @@ void Fill(std::uint32_t format) {
     }
 }
 
-void Run(AgcDriver::VulkanDevice& device, std::span<const std::uint32_t> code, const void* texels, std::uint32_t format, std::uint32_t swizzle, std::uint32_t groups) {
+void Run(AgcDriver::VulkanDevice& device, std::span<const std::uint32_t> code, const void* texels, std::uint32_t format, std::uint32_t swizzle, std::uint32_t groups, bool useCache = false) {
     Output.fill(0xdeadbeefu);
     std::vector<std::uint32_t> userData(24, 0u);
     const auto output = BufferDescriptor(Output.data(), static_cast<std::uint32_t>(Output.size() * 4u));
@@ -163,7 +172,7 @@ void Run(AgcDriver::VulkanDevice& device, std::span<const std::uint32_t> code, c
         device.Target(),
         {0, 0, 0, 128}
     };
-    request.useCache = false;
+    request.useCache = useCache;
     const auto result = ShaderRecompiler::Recompile(request);
     device.Dispatch(result, groups, 1, 1, {}, reinterpret_cast<std::uintptr_t>(code.data()));
     device.WaitIdle();
@@ -203,13 +212,15 @@ void CheckStoredLoad(AgcDriver::VulkanDevice& device, GuestBlock& block, std::sp
 
 void RequireRefused(AgcDriver::VulkanDevice& device, std::span<const std::uint32_t> code, const std::string& what) {
     Fill(Srgb8_8);
-    std::string refusal;
-    try {
-        Run(device, code, Texels.data(), Srgb8_8, SwizzleXY01, 1);
-    } catch (const std::exception& error) {
-        refusal = error.what();
+    for (const bool useCache : {false, true, true}) {
+        std::string refusal;
+        try {
+            Run(device, code, Texels.data(), Srgb8_8, SwizzleXY01, 1, useCache);
+        } catch (const std::exception& error) {
+            refusal = error.what();
+        }
+        Require(refusal.find("samples or gathers an sRGB image the device cannot sample") != std::string::npos, what + " of an 8_8_SRGB image read through its UNORM view was not refused: " + refusal);
     }
-    Require(refusal.find("samples or gathers an sRGB image the device cannot sample") != std::string::npos, what + " of an 8_8_SRGB image read through its UNORM view was not refused: " + refusal);
 }
 
 }
@@ -233,6 +244,8 @@ int main() {
         CheckStoredLoad(*device, block, LoadXyzw, 0xfu, Srgb8, SwizzleXXX1, "8_SRGB image_load dmask:0xf X X X 1 of 8_UNORM image_stores");
         RequireRefused(*device, SampleLz, "image_sample_lz");
         RequireRefused(*device, Gather4Lz, "image_gather4_lz");
+        RequireRefused(*device, MixedSampleLz, "image_sample_c_lz followed by image_sample_lz");
+        RequireRefused(*device, MixedGather4Lz, "image_sample_c_lz followed by image_gather4_lz");
         std::puts("image sRGB load tests passed");
         return 0;
     } catch (const std::exception& error) {

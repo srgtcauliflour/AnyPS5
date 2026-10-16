@@ -33,6 +33,9 @@ int APS5_VABI sceSaveDataDialogUpdateStatus(void) {
 }
 
 int APS5_VABI sceSaveDataDialogGetResult(void* result) {
+ if (g_status != SAVE_DATA_DIALOG_STATUS_FINISHED) {
+  return SAVE_DATA_DIALOG_ERROR_NOT_FINISHED;
+ }
  if (result == nullptr) {
   return SAVE_DATA_DIALOG_ERROR_ARG_NULL;
  }
@@ -69,12 +72,16 @@ int APS5_VABI sceSaveDataDialogOpen(const void* param) {
    }
   }
  }
- g_status = SAVE_DATA_DIALOG_STATUS_FINISHED;
+ g_status = g_mode == SAVE_DATA_DIALOG_MODE_PROGRESS_BAR
+  ? SAVE_DATA_DIALOG_STATUS_RUNNING : SAVE_DATA_DIALOG_STATUS_FINISHED;
  return SAVE_DATA_DIALOG_OK;
 }
 
 int APS5_VABI sceSaveDataDialogClose(const void* closeParam) {
  (void)closeParam;
+ if (g_status != SAVE_DATA_DIALOG_STATUS_RUNNING) {
+  return SAVE_DATA_DIALOG_ERROR_NOT_RUNNING;
+ }
  g_status = SAVE_DATA_DIALOG_STATUS_FINISHED;
  return SAVE_DATA_DIALOG_OK;
 }
@@ -84,6 +91,9 @@ int APS5_VABI sceSaveDataDialogIsReadyToDisplay(void) {
 }
 
 int APS5_VABI sceSaveDataDialogTerminate(void) {
+ if (g_status == SAVE_DATA_DIALOG_STATUS_NONE) {
+  return SAVE_DATA_DIALOG_ERROR_NOT_INITIALIZED;
+ }
  g_status = SAVE_DATA_DIALOG_STATUS_NONE;
  g_mode = 0;
  g_user_data = nullptr;

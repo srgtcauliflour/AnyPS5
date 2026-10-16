@@ -63,7 +63,7 @@ void _detectVertexBuffers(ShaderVertexInputInfo& info) {
 
 }
 
-ShaderStageInputInfo BuildShaderStageInputInfo(ShaderStageKind stage, const GuestContext& context, std::uint32_t hostSubgroupSize, const MeshConfiguration* mesh) {
+ShaderStageInputInfo BuildShaderStageInputInfo(ShaderStageKind stage, const GuestContext& context, std::uint32_t hostSubgroupSize, const MeshConfiguration* mesh, const TessellationConfiguration* tessellation) {
     switch (stage) {
     case ShaderStageKind::Compute: {
         if (!context.compute.has_value()) {
@@ -83,6 +83,7 @@ ShaderStageInputInfo BuildShaderStageInputInfo(ShaderStageKind stage, const Gues
         computeStorage.groupId[1] = compute.groupIdEnable[1];
         computeStorage.groupId[2] = compute.groupIdEnable[2];
         computeStorage.tgSizeEn = compute.tgSizeEnable;
+        computeStorage.scratchSizeDwords = compute.scratchDwords;
         computeStorage.threadIdsNum = static_cast<int>(compute.threadIdComponentCount);
         computeStorage.partialGroups = compute.PartialGroups();
         // Workgroup ids (and the thread-group size word) follow the user SGPRs.
@@ -110,8 +111,10 @@ ShaderStageInputInfo BuildShaderStageInputInfo(ShaderStageKind stage, const Gues
             }
             pixelStorage.psInputVgpr[static_cast<std::uint32_t>(input)] = PixelInputVgpr(pixel.inputAddr, input);
         };
+        place(PixelInput::PerspectiveSample, (pixel.inputAddr & PixelInputBit(PixelInput::PerspectiveSample)) != 0u);
         place(PixelInput::PerspectiveCenter, pixel.hasPerspectiveCenterVgpr);
         place(PixelInput::PerspectiveCentroid, pixel.perspectiveCentroid);
+        place(PixelInput::LinearSample, (pixel.inputAddr & PixelInputBit(PixelInput::LinearSample)) != 0u);
         place(PixelInput::LinearCenter, pixel.noPerspective);
         place(PixelInput::LinearCentroid, pixel.linearCentroid);
         place(PixelInput::PositionX, pixel.posX);
@@ -120,24 +123,33 @@ ShaderStageInputInfo BuildShaderStageInputInfo(ShaderStageKind stage, const Gues
         place(PixelInput::PositionW, pixel.posW);
         place(PixelInput::FrontFace, pixel.frontFace);
         place(PixelInput::Ancillary, pixel.ancillary);
+        place(PixelInput::LineStipple, (pixel.inputAddr & PixelInputBit(PixelInput::LineStipple)) != 0u);
+        place(PixelInput::PositionFixedPoint, (pixel.inputAddr & PixelInputBit(PixelInput::PositionFixedPoint)) != 0u);
         for (std::uint32_t i = 0; i < 8; ++i) {
             pixelStorage.targetOutputMode[i] = pixel.targetOutputMode[i];
-            pixelStorage.targetExportMapping[i].packed = pixel.targetExportMapping[i];
         }
         pixelStorage.psPosX = pixel.posX;
         pixelStorage.psPosY = pixel.posY;
         pixelStorage.psPosZ = pixel.posZ;
         pixelStorage.psPosW = pixel.posW;
         pixelStorage.psFrontFace = pixel.frontFace;
+        pixelStorage.psFrontFaceAllBits = pixel.frontFaceAllBits;
         pixelStorage.psAncillary = pixel.ancillary;
         pixelStorage.psNoPerspective = pixel.noPerspective;
         pixelStorage.psPixelKillEnable = pixel.pixelKillEnable;
         pixelStorage.psDepthExportEnable = pixel.depthExportEnable;
         pixelStorage.psSampleMaskExportEnable = pixel.sampleMaskExportEnable;
+        pixelStorage.psStencilRefExportEnable = pixel.stencilRefExportEnable;
         pixelStorage.psSampleShading = pixel.sampleShading;
         pixelStorage.psEarlyZ = pixel.earlyZ;
         pixelStorage.psExecuteOnNoop = pixel.executeOnNoop;
         pixelStorage.psConservativeZExport = pixel.conservativeZExport;
+        pixelStorage.psOrderedPixelShader = pixel.orderedPixelShader;
+        if (pixel.ditheredAlphaToCoverage && !pixel.alphaToCoverage) throw std::runtime_error("dithered alpha-to-coverage requires enabled coverage");
+        pixelStorage.psAlphaToCoverage = pixel.alphaToCoverage;
+        pixelStorage.psDitheredAlphaToCoverage = pixel.ditheredAlphaToCoverage;
+        pixelStorage.quadPixelMask = pixel.quadPixelMask;
+        pixelStorage.quadSampleMask = pixel.quadSampleMask;
         ShaderStageInputInfo result;
         result.pixel = &pixelStorage;
         return result;
@@ -156,19 +168,39 @@ ShaderStageInputInfo BuildShaderStageInputInfo(ShaderStageKind stage, const Gues
         auto& vertexStorage = HostThreadLocal<ShaderVertexInputInfo, VertexStorage>();
         vertexStorage = ShaderVertexInputInfo{};
         vertexStorage.logicalStage = _toIrShaderStage(stage);
+        vertexStorage.hostSubgroupSize = hostSubgroupSize;
         vertexStorage.fetchEmbedded = vertex.fetchEmbedded;
+        vertexStorage.paClVsOutCntl = vertex.paClVsOutCntl;
         vertexStorage.fetchExternal = false;
         vertexStorage.fetchAttribReg = static_cast<int>(vertex.fetchAttribReg);
         vertexStorage.fetchBufferReg = static_cast<int>(vertex.fetchBufferReg);
         vertexStorage.resourcesNum = static_cast<int>(vertex.resourcesNum);
-        for (std::uint32_t i = 0; i < vertex.resourcesNum; ++i) {
+        for (std::uint32_t i = 0; i < static_cast<std::uint32_t>(vertexStorage.resourcesNum); ++i) {
             vertexStorage.resources[i].fields = vertex.resources[i].fields;
+            if (vertex.fetchEmbedded) vertexStorage.resources[i].fields = {0u, 0u, 0u, (static_cast<std::uint32_t>(IrBufferFormat::Format32_32_32_32Float) << 12u) | ShaderImageIdentitySwizzle};
             vertexStorage.resourcesDst[i].registerStart = vertex.resourcesDst[i].registerStart;
             vertexStorage.resourcesDst[i].registersNum = vertex.resourcesDst[i].registersNum;
             vertexStorage.resourcesDst[i].attrId = vertex.resourcesDst[i].attrId;
-            vertexStorage.resourcesDst[i].fetchIndex = vertex.resourcesDst[i].fetchIndex;
+            vertexStorage.resourcesDst[i].fetchIndex = vertex.fetchEmbedded ? 0u : vertex.resourcesDst[i].fetchIndex;
         }
         _detectVertexBuffers(vertexStorage);
+        if (stage == ShaderStageKind::Local || stage == ShaderStageKind::TessellationControl || stage == ShaderStageKind::TessellationEvaluation) {
+            if (tessellation == nullptr) throw std::runtime_error("ShaderInputInfoBuilder: tessellation configuration is missing");
+            if (tessellation->inputControlPoints == 0u || tessellation->inputControlPoints > 32u || tessellation->outputControlPoints == 0u || tessellation->outputControlPoints > 32u) throw std::runtime_error("ShaderInputInfoBuilder: invalid tessellation control-point counts");
+            if ((tessellation->domain != 1u && tessellation->domain != 2u) || (tessellation->partitioning != 0u && tessellation->partitioning != 2u && tessellation->partitioning != 3u) || (tessellation->outputTopology != 2u && tessellation->outputTopology != 3u)) throw std::runtime_error("ShaderInputInfoBuilder: unsupported tessellation configuration");
+            if (tessellation->patchesPerGroup == 0u || tessellation->patchesPerGroup > 256u) throw std::runtime_error("ShaderInputInfoBuilder: invalid tessellation patches per group");
+            auto& target = vertexStorage.tess;
+            target.inputControlPoints = tessellation->inputControlPoints;
+            target.outputControlPoints = tessellation->outputControlPoints;
+            target.domain = tessellation->domain;
+            target.partitioning = tessellation->partitioning;
+            target.outputTopology = tessellation->outputTopology;
+            target.patchesPerGroup = tessellation->patchesPerGroup;
+            target.primitiveGroupSize = tessellation->primitiveGroupSize;
+            target.breakAtInstance = tessellation->breakAtInstance;
+            target.instancePatches = tessellation->instancePatches;
+            target.drawParameters = tessellation->drawParameters;
+        }
         if (stage == ShaderStageKind::Mesh) {
             if (mesh == nullptr) throw std::runtime_error("ShaderInputInfoBuilder: a mesh-stage program has no mesh configuration");
             auto& target = vertexStorage.mesh;

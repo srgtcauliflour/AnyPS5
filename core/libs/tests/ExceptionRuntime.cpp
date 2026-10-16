@@ -1,3 +1,4 @@
+#undef NDEBUG
 #include <cassert>
 #include <cstdio>
 #include <typeinfo>
@@ -5,7 +6,11 @@
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
+#include <functional>
+#include <memory>
 #include <stdexcept>
+#include <string>
+#include <csignal>
 #include <pthread.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -18,18 +23,25 @@ extern "C" void __cxa_rethrow_primary_exception_nid_postfix(void*);
 
 extern "C" [[noreturn]] void _ZSt14_Xout_of_rangePKc_nid_postfix(const char*);
 extern "C" [[noreturn]] void _ZSt13_Xrange_errorPKc_nid_postfix(const char*);
+extern "C" [[noreturn]] void _ZNSt8__sce_v219_Xbad_function_callEv_nid_postfix();
 extern "C" [[noreturn]] void __cxa_bad_cast_nid_postfix();
+extern "C" [[noreturn]] void _ZSt19_Throw_bad_weak_ptrv_nid_postfix();
 extern "C" [[noreturn]] void _ZNKSt9exception6_RaiseEv_nid_postfix(const void*);
 extern "C" void* __cxa_vec_new3_nid_postfix(std::size_t, std::size_t, std::size_t, void(*)(void*), void(*)(void*), void*(*)(std::size_t), void(*)(void*, std::size_t));
 extern "C" void __cxa_vec_delete3_nid_postfix(void*, std::size_t, std::size_t, void(*)(void*), void(*)(void*, std::size_t));
 extern "C" _Unwind_Reason_Code _Unwind_Backtrace_nid_postfix(_Unwind_Trace_Fn, void*);
 extern "C" _Unwind_Reason_Code _Unwind_ForcedUnwind_nid_postfix(_Unwind_Exception*, _Unwind_Stop_Fn, void*);
 extern "C" std::uintptr_t _Unwind_GetIP_nid_postfix(_Unwind_Context*);
+extern "C" std::uintptr_t _Unwind_GetGR_nid_postfix(_Unwind_Context*, int);
 extern "C" void (*_ZSt13set_terminatePFvvE_nid_postfix(void(*)()))();
 
 thread_local int destroyed = 0;
 struct Guard {
     ~Guard() { assert(__cxa_uncaught_exceptions_nid_postfix() > 0); ++destroyed; }
+};
+thread_local int counted = 0;
+struct Counted {
+    ~Counted() { ++counted; }
 };
 struct Base { virtual ~Base() = default; int value = 7; };
 struct Other { virtual ~Other() = default; int padding = 9; };
@@ -151,6 +163,27 @@ void CheckTerminate(void (*function)()) {
     assert(waitpid(child, &status, 0) == child);
     assert(WIFEXITED(status) && WEXITSTATUS(status) == 61);
 }
+void CheckDefaultTerminateMessage() {
+    const std::string message = std::string(3000, 'w') + " end of message";
+    int channel[2];
+    assert(pipe(channel) == 0);
+    pid_t child = fork();
+    assert(child >= 0);
+    if (child == 0) {
+        close(channel[0]);
+        dup2(channel[1], 2);
+        throw std::runtime_error(message);
+    }
+    close(channel[1]);
+    std::string output;
+    char buffer[4096];
+    for (ssize_t count; (count = read(channel[0], buffer, sizeof(buffer))) > 0;) output.append(buffer, static_cast<std::size_t>(count));
+    close(channel[0]);
+    int status;
+    assert(waitpid(child, &status, 0) == child);
+    assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+    assert(output.find("  what():  " + message + "\n") != std::string::npos);
+}
 struct ForcedGuard { ~ForcedGuard() { ++destroyed; } };
 [[gnu::noinline]] void ForceUnwind() {
     ForcedGuard guard;
@@ -183,6 +216,11 @@ int main() {
     try { __cxa_rethrow_primary_exception_nid_postfix(retained); assert(false); }
     catch (int value) { assert(value == 27); }
     __cxa_decrement_exception_refcount_nid_postfix(retained);
+    {
+        auto made = std::make_exception_ptr(Counted());
+        try { std::rethrow_exception(made); assert(false); } catch (const Counted&) {}
+    }
+    assert(counted == 2);
     Derived object;
     Base* pointer = &object;
     try { throw &object; } catch (Base* value) { assert(value == pointer); }
@@ -198,8 +236,14 @@ int main() {
     try { _ZSt13_Xrange_errorPKc_nid_postfix("not a logic error"); }
     catch (const std::logic_error&) { std::abort(); }
     catch (const std::range_error&) {}
+    bool badFunctionCall = false;
+    try { _ZNSt8__sce_v219_Xbad_function_callEv_nid_postfix(); }
+    catch (const std::bad_function_call&) { badFunctionCall = true; }
+    if (!badFunctionCall) std::abort();
     try { __cxa_bad_cast_nid_postfix(); }
     catch (const std::exception& value) { assert(value.what() != nullptr); }
+    try { _ZSt19_Throw_bad_weak_ptrv_nid_postfix(); std::abort(); }
+    catch (const std::bad_weak_ptr& value) { if (std::strcmp(value.what(), "bad_weak_ptr") != 0) std::abort(); }
     try { _ZNKSt9exception6_RaiseEv_nid_postfix(nullptr); assert(false); }
     catch (const std::invalid_argument&) {}
     try { _ZNKSt9exception6_RaiseEv_nid_postfix(&object); assert(false); }
@@ -211,10 +255,31 @@ int main() {
     CheckThreads();
     CheckTerminate(UncaughtThrow);
     CheckTerminate(NoexceptThrow);
+    CheckDefaultTerminateMessage();
     CheckForcedUnwind();
     int frames = 0;
     auto backtrace = _Unwind_Backtrace_nid_postfix([](_Unwind_Context* context, void* argument) {
         assert(_Unwind_GetIP_nid_postfix(context) != 0);
+        ++*static_cast<int*>(argument);
+        return _URC_NO_REASON;
+    }, &frames);
+    assert(backtrace == _URC_END_OF_STACK && frames >= 2);
+    frames = 0;
+    backtrace = _Unwind_Backtrace_nid_postfix([](_Unwind_Context* context, void* argument) {
+        const auto* slots = *reinterpret_cast<const std::uintptr_t* const*>(context);
+        const auto validRegister = reinterpret_cast<bool (*)(_Unwind_Context*, int)>(slots[2]);
+        const auto getRegister = reinterpret_cast<std::uintptr_t (*)(_Unwind_Context*, int)>(slots[3]);
+        const auto setRegister = reinterpret_cast<void (*)(_Unwind_Context*, int, std::uintptr_t)>(slots[4]);
+        const auto validFloatRegister = reinterpret_cast<bool (*)(_Unwind_Context*, int)>(slots[5]);
+        const auto isSignalFrame = reinterpret_cast<bool (*)(_Unwind_Context*)>(slots[11]);
+        assert(validRegister(context, -1) && validRegister(context, -2) && validRegister(context, 16) && !validRegister(context, 17));
+        assert(getRegister(context, -1) == _Unwind_GetIP_nid_postfix(context) && getRegister(context, -1) != 0);
+        assert(getRegister(context, -2) == _Unwind_GetGR_nid_postfix(context, 7));
+        const auto rbx = getRegister(context, 3);
+        setRegister(context, 3, rbx + 1);
+        assert(_Unwind_GetGR_nid_postfix(context, 3) == rbx + 1);
+        setRegister(context, 3, rbx);
+        assert(!validFloatRegister(context, 17) && !isSignalFrame(context));
         ++*static_cast<int*>(argument);
         return _URC_NO_REASON;
     }, &frames);

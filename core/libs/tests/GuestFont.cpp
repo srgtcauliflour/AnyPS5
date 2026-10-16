@@ -3,8 +3,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <initializer_list>
 #include <map>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -16,11 +18,19 @@ int APS5_VABI sceFontDestroyLibrary(FontLibrary*);
 int APS5_VABI sceFontCreateRenderer(const FontMemory*, const void*, FontRenderer*);
 int APS5_VABI sceFontDestroyRenderer(FontRenderer*);
 int APS5_VABI sceFontGetPixelResolution(FontLibrary, std::uint32_t*);
+int APS5_VABI sceFontAttachDeviceCacheBuffer(FontLibrary, void*, std::uint32_t);
+int APS5_VABI sceFontClearDeviceCache(FontLibrary);
+int APS5_VABI sceFontDettachDeviceCacheBuffer(FontLibrary, void**, std::uint32_t*);
 int APS5_VABI sceFontSupportSystemFonts(FontLibrary);
 int APS5_VABI sceFontSupportExternalFonts(FontLibrary, std::uint32_t, std::uint32_t);
 int APS5_VABI sceFontOpenFontSet(FontLibrary, std::uint32_t, std::uint32_t, const FontOpenDetail*, FontHandle*);
 int APS5_VABI sceFontOpenFontMemory(FontLibrary, const void*, std::uint32_t, const FontOpenDetail*, FontHandle*);
+int APS5_VABI sceFontOpenFontFile(FontLibrary, const char*, std::uint32_t, const FontOpenDetail*, FontHandle*);
 int APS5_VABI sceFontCloseFont(FontHandle);
+int APS5_VABI sceFontSetScriptLanguage(FontHandle, int, int);
+int APS5_VABI sceFontGetScriptLanguage(FontHandle, int, int*);
+int APS5_VABI sceFontSetTypographicDesign(FontHandle, int, int);
+int APS5_VABI sceFontGetTypographicDesign(FontHandle, int, int*);
 int APS5_VABI sceFontSetResolutionDpi(FontHandle, std::uint32_t, std::uint32_t);
 int APS5_VABI sceFontGetResolutionDpi(FontHandle, std::uint32_t*, std::uint32_t*);
 int APS5_VABI sceFontSetScalePixel(FontHandle, float, float);
@@ -33,8 +43,19 @@ int APS5_VABI sceFontGetFontGlyphsCount(FontHandle, std::uint32_t*);
 int APS5_VABI sceFontGetCharGlyphCode(FontHandle, std::uint32_t, std::uint32_t*);
 int APS5_VABI sceFontGetFontResolution(FontHandle, std::uint32_t*, float*);
 int APS5_VABI sceFontGetRenderScaledKerning(FontHandle, std::uint32_t, std::uint32_t, FontKerning*);
+int APS5_VABI sceFontGenerateCharGlyph(FontHandle, std::uint32_t, const FontGenerateGlyphDetail*, FontGlyph*);
+int APS5_VABI sceFontGlyphDefineAttribute(FontGlyph, std::uint32_t, std::uint64_t);
+int APS5_VABI sceFontDeleteGlyph(const FontMemory*, FontGlyph*);
+int APS5_VABI sceFontTextSourceInit(FontTextSource*, const void*, std::uint32_t, FontTextParseFunction, void*);
+int APS5_VABI sceFontCreateString(const FontMemory*, FontTextSource*, const FontCreateStringDetail*, FontString*);
+int APS5_VABI sceFontDestroyString(FontString*);
+FontTextCharacter* APS5_VABI sceFontStringRefersTextCharacters(FontString, std::uint32_t*);
+int APS5_VABI sceFontWritingInit(FontWriting*, FontString, const FontTextCharacter*);
+const FontWritingStep* APS5_VABI sceFontWritingRefersRenderStep(FontWriting*);
+FontTextCharacter* APS5_VABI sceFontWritingRefersRenderStepCharacter(FontWriting*, const FontWritingLetterStep**);
 const void* APS5_VABI sceFontSelectLibraryFt(int);
 const void* APS5_VABI sceFontSelectRendererFt(int);
+int APS5_VABI sceFontCharacterGetSyllableStringState(const FontTextCharacter*, int*);
 }
 
 static void Check(bool value, int line) {
@@ -44,6 +65,14 @@ static void Check(bool value, int line) {
     }
 }
 #define Require(value) Check((value), __LINE__)
+
+static void SetFontDirectory(const std::filesystem::path& directory) {
+#ifdef _WIN32
+    Require(_putenv_s("ANYPS5_SYSTEM_FONTS", directory.string().c_str()) == 0);
+#else
+    Require(::setenv("ANYPS5_SYSTEM_FONTS", directory.string().c_str(), 1) == 0);
+#endif
+}
 
 static int allocations = 0;
 static void* APS5_VABI Allocate(void*, std::uint32_t size) {
@@ -106,12 +135,34 @@ static std::vector<unsigned char> KerningFont() {
     });
 }
 
+struct ParsedText {
+    const char* text;
+    std::size_t at;
+    FontHandle font;
+};
+
+static std::int32_t APS5_VABI ParseText(FontTextSource* source, void** order, FontTextParseResult* result) {
+    auto* parsed = static_cast<ParsedText*>(source->textObject);
+    *order = const_cast<char*>(parsed->text + parsed->at);
+    if (parsed->text[parsed->at] == 0) {
+        result->Terminate.terminateCode = 0;
+        return 0;
+    }
+    result->FontCode.font = parsed->font;
+    result->FontCode.code = static_cast<unsigned char>(parsed->text[parsed->at++]);
+    return 1;
+}
+
 static bool KerningIs(const FontKerning& kerning, float offsetX) {
     return kerning.offsetX == offsetX && kerning.offsetY == 0.0f && kerning.positionX == 0.0f && kerning.positionY == 0.0f;
 }
 
 int main() {
     constexpr std::uint32_t SystemFontSet = 0x18070043u;
+    const std::filesystem::path fontRoot = std::filesystem::temp_directory_path() / ("anyps5_guest_font-" + std::to_string(std::random_device{}()));
+    std::filesystem::remove_all(fontRoot);
+    std::filesystem::create_directories(fontRoot);
+    SetFontDirectory(fontRoot);
     const FontMemoryInterface iface{Allocate, Release, nullptr, nullptr, nullptr, nullptr};
     FontMemory memory{};
     Require(sceFontMemoryInit(&memory, nullptr, 0, &iface, nullptr, nullptr, nullptr) == SCE_FONT_OK);
@@ -141,6 +192,32 @@ int main() {
     Require(sceFontGetPixelResolution(coarseLibrary, &subPixelCount) == SCE_FONT_ERROR_INVALID_LIBRARY && subPixelCount == 0);
     Require(sceFontDestroyLibrary(&coarseLibrary) == SCE_FONT_OK && coarseLibrary == nullptr);
 
+    void* cacheBuffer = nullptr;
+    std::uint32_t cacheSize = 0;
+    Require(sceFontDettachDeviceCacheBuffer(nullptr, &cacheBuffer, &cacheSize) == SCE_FONT_ERROR_INVALID_LIBRARY);
+    Require(sceFontDettachDeviceCacheBuffer(&notALibrary, &cacheBuffer, &cacheSize) == SCE_FONT_ERROR_INVALID_LIBRARY);
+    Require(sceFontClearDeviceCache(library) == SCE_FONT_ERROR_NOT_ATTACHED_CACHE_BUFFER);
+    Require(sceFontDettachDeviceCacheBuffer(library, &cacheBuffer, &cacheSize) == SCE_FONT_ERROR_NOT_ATTACHED_CACHE_BUFFER);
+
+    std::vector<unsigned char> callerCache(0x2000);
+    Require(sceFontAttachDeviceCacheBuffer(library, callerCache.data(), 0x1000) == SCE_FONT_ERROR_INVALID_PARAMETER);
+    Require(sceFontAttachDeviceCacheBuffer(library, callerCache.data(), static_cast<std::uint32_t>(callerCache.size())) == SCE_FONT_OK);
+    Require(sceFontAttachDeviceCacheBuffer(library, callerCache.data(), static_cast<std::uint32_t>(callerCache.size())) == SCE_FONT_ERROR_ALREADY_ATTACHED);
+    Require(sceFontClearDeviceCache(library) == SCE_FONT_OK);
+    Require(sceFontDettachDeviceCacheBuffer(library, &cacheBuffer, &cacheSize) == SCE_FONT_OK && cacheBuffer == callerCache.data() && cacheSize == callerCache.size());
+    Require(sceFontDettachDeviceCacheBuffer(library, &cacheBuffer, &cacheSize) == SCE_FONT_ERROR_NOT_ATTACHED_CACHE_BUFFER);
+
+    Require(sceFontAttachDeviceCacheBuffer(library, nullptr, 0x2000) == SCE_FONT_OK);
+    cacheBuffer = nullptr;
+    cacheSize = 0;
+    Require(sceFontDettachDeviceCacheBuffer(library, &cacheBuffer, &cacheSize) == SCE_FONT_OK && cacheBuffer != nullptr && cacheSize == 0x2000);
+    Release(nullptr, cacheBuffer);
+    Require(sceFontDettachDeviceCacheBuffer(library, &cacheBuffer, &cacheSize) == SCE_FONT_ERROR_NOT_ATTACHED_CACHE_BUFFER);
+
+    Require(sceFontAttachDeviceCacheBuffer(library, nullptr, 0x2000) == SCE_FONT_OK);
+    Require(sceFontDettachDeviceCacheBuffer(library, nullptr, nullptr) == SCE_FONT_OK);
+    Require(sceFontDettachDeviceCacheBuffer(library, nullptr, nullptr) == SCE_FONT_ERROR_NOT_ATTACHED_CACHE_BUFFER);
+
     FontHandle font = reinterpret_cast<FontHandle>(&memory);
     Require(sceFontOpenFontSet(library, SystemFontSet, 1, nullptr, &font) == SCE_FONT_ERROR_NO_SUPPORT_FUNCTION && font == nullptr);
     Require(sceFontSupportSystemFonts(library) == SCE_FONT_OK);
@@ -152,11 +229,24 @@ int main() {
     Require(sceFontOpenFontMemory(library, notAFont, sizeof(notAFont), nullptr, &font) == SCE_FONT_ERROR_NO_SUPPORT_FUNCTION && font == nullptr);
     Require(sceFontSupportExternalFonts(library, 4, 0x52) == SCE_FONT_OK);
     Require(sceFontSupportExternalFonts(library, 4, 0x52) == SCE_FONT_ERROR_ALREADY_SPECIFIED);
+    font = reinterpret_cast<FontHandle>(&memory);
+    Require(sceFontOpenFontFile(library, "anyps5-missing-font-parent/../font.ttf", 1, nullptr, &font) == SCE_FONT_ERROR_FS_OPEN_FAILED && font == nullptr);
     Require(sceFontOpenFontMemory(library, nullptr, 0, nullptr, &font) == SCE_FONT_ERROR_INVALID_PARAMETER && font == nullptr);
     Require(sceFontOpenFontMemory(library, notAFont, sizeof(notAFont), nullptr, &font) == SCE_FONT_ERROR_NO_SUPPORT_FORMAT && font == nullptr);
 
     const std::vector<unsigned char> fontData = EmptyGlyphFont();
     Require(sceFontOpenFontMemory(library, fontData.data(), static_cast<std::uint32_t>(fontData.size()), nullptr, &font) == SCE_FONT_OK && font != nullptr);
+    int setting = -1;
+    Require(sceFontGetScriptLanguage(font, 3, &setting) == SCE_FONT_OK && setting == 0);
+    Require(sceFontSetScriptLanguage(font, 3, 7) == SCE_FONT_OK && sceFontSetScriptLanguage(font, 4, 9) == SCE_FONT_OK);
+    Require(sceFontGetScriptLanguage(font, 3, &setting) == SCE_FONT_OK && setting == 7);
+    Require(sceFontGetScriptLanguage(font, 4, &setting) == SCE_FONT_OK && setting == 9);
+    Require(sceFontGetScriptLanguage(font, 3, nullptr) == SCE_FONT_ERROR_INVALID_PARAMETER);
+    Require(sceFontSetScriptLanguage(nullptr, 3, 7) == SCE_FONT_ERROR_INVALID_FONT_HANDLE);
+    Require(sceFontSetTypographicDesign(font, 1, 2) == SCE_FONT_OK);
+    Require(sceFontGetTypographicDesign(font, 1, &setting) == SCE_FONT_OK && setting == 2);
+    Require(sceFontGetTypographicDesign(font, 5, &setting) == SCE_FONT_OK && setting == 0);
+    Require(sceFontGetTypographicDesign(nullptr, 1, &setting) == SCE_FONT_ERROR_INVALID_FONT_HANDLE);
     std::uint32_t hDpi = 1;
     std::uint32_t vDpi = 1;
     Require(sceFontGetResolutionDpi(font, &hDpi, &vDpi) == SCE_FONT_OK && hDpi == 72 && vDpi == 72);
@@ -217,6 +307,13 @@ int main() {
     Require(sceFontGetCharGlyphCode(font, 0, &glyphCode) == SCE_FONT_ERROR_NO_SUPPORT_CODE && glyphCode == 0);
     Require(sceFontSetResolutionDpi(font, 144, 144) == SCE_FONT_OK);
     Require(sceFontSetScalePixel(font, 100.0f, 100.0f) == SCE_FONT_OK);
+    FontGlyph glyph = nullptr;
+    Require(sceFontGenerateCharGlyph(font, 'A', nullptr, &glyph) == SCE_FONT_OK && glyph != nullptr);
+    Require(sceFontGlyphDefineAttribute(glyph, 0x11, 0) == SCE_FONT_OK);
+    Require(sceFontGlyphDefineAttribute(nullptr, 0x11, 0) == SCE_FONT_ERROR_INVALID_GLYPH);
+    FontGlyphOpaque notAGlyph{};
+    Require(sceFontGlyphDefineAttribute(&notAGlyph, 0x11, 0) == SCE_FONT_ERROR_INVALID_GLYPH);
+    Require(sceFontDeleteGlyph(&memory, &glyph) == SCE_FONT_OK && glyph == nullptr);
     FontKerning kerning{1.0f, 1.0f, 1.0f, 1.0f};
     Require(sceFontGetKerning(font, 'A', 'V', &kerning) == SCE_FONT_OK && KerningIs(kerning, -20.0f));
     kerning = {1.0f, 1.0f, 1.0f, 1.0f};
@@ -239,6 +336,33 @@ int main() {
     Require(sceFontGetRenderScaledKerning(&unopened, 'A', 'V', &kerning) == SCE_FONT_ERROR_INVALID_FONT_HANDLE && KerningIs(kerning, 0.0f));
     Require(sceFontUnbindRenderer(font) == SCE_FONT_OK);
     Require(sceFontGetRenderScaledKerning(font, 'A', 'V', &kerning) == SCE_FONT_ERROR_NOT_BOUND_RENDERER);
+
+    ParsedText parsed{"AV", 0, font};
+    FontTextSource source{};
+    Require(sceFontTextSourceInit(&source, parsed.text, 2, ParseText, &parsed) == SCE_FONT_OK);
+    FontString string = nullptr;
+    Require(sceFontCreateString(&memory, &source, nullptr, &string) == SCE_FONT_OK && string != nullptr);
+    std::uint32_t characterCount = 0;
+    FontTextCharacter* characters = sceFontStringRefersTextCharacters(string, &characterCount);
+    Require(characters != nullptr && characterCount == 2);
+    FontWriting writing{};
+    Require(sceFontWritingInit(&writing, string, characters) == SCE_FONT_OK);
+    constexpr std::uint64_t guard = 0x5a5a5a5a5a5a5a5aull;
+    struct {
+        const FontWritingLetterStep* letter;
+        std::uint64_t guard;
+    } out{reinterpret_cast<const FontWritingLetterStep*>(&memory), guard};
+    Require(sceFontWritingRefersRenderStepCharacter(&writing, &out.letter) == nullptr && out.letter == nullptr && out.guard == guard);
+    const FontWritingStep* step = sceFontWritingRefersRenderStep(&writing);
+    Require(step != nullptr);
+    Require(sceFontWritingRefersRenderStepCharacter(&writing, &out.letter) == characters && out.letter != nullptr && out.guard == guard);
+    Require(out.letter->x == step->x && out.letter->advanceX == step->advanceX && out.letter->Components.textsIndex == 0 && out.letter->Components.characterTextCount == 1);
+    step = sceFontWritingRefersRenderStep(&writing);
+    Require(step != nullptr);
+    Require(sceFontWritingRefersRenderStepCharacter(&writing, &out.letter) == characters + 1 && out.guard == guard);
+    Require(out.letter->x == step->x && out.letter->Components.textsIndex == 1 && out.letter->Components.glyphsIndex == 1);
+    Require(sceFontWritingRefersRenderStepCharacter(&writing, nullptr) == characters + 1);
+    Require(sceFontDestroyString(&string) == SCE_FONT_OK);
     Require(sceFontCloseFont(font) == SCE_FONT_OK);
 
     Require(sceFontDestroyRenderer(&renderer) == SCE_FONT_OK && renderer == nullptr);
@@ -249,4 +373,12 @@ int main() {
     Require(allocations == 0);
     Require(sceFontMemoryTerm(&memory) == SCE_FONT_OK);
     Require(sceFontMemoryTerm(&memory) == SCE_FONT_ERROR_INVALID_MEMORY);
+    FontTextCharacter character{};
+    character.characterCode = 'A';
+    int syllableState = -1;
+    Require(sceFontCharacterGetSyllableStringState(&character, &syllableState) == SCE_FONT_OK && syllableState == 0);
+    syllableState = -1;
+    Require(sceFontCharacterGetSyllableStringState(nullptr, &syllableState) == SCE_FONT_ERROR_INVALID_PARAMETER && syllableState == 0);
+    Require(sceFontCharacterGetSyllableStringState(&character, nullptr) == SCE_FONT_ERROR_INVALID_PARAMETER);
+    std::filesystem::remove_all(fontRoot);
 }

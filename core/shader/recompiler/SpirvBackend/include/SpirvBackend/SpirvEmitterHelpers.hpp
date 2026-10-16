@@ -16,6 +16,7 @@ const RdnaImageDimensionInfo& RdnaImageDimensionInfoFor(RdnaImageDimension dimen
 std::uint32_t TypeVoid(SpirvEmitterState& state);
 std::uint32_t TypeBool(SpirvEmitterState& state);
 std::uint32_t TypeBoolVector(SpirvEmitterState& state, std::uint32_t components);
+std::uint32_t TypeU8(SpirvEmitterState& state);
 std::uint32_t TypeU32(SpirvEmitterState& state);
 std::uint32_t TypeU64(SpirvEmitterState& state);
 std::uint32_t TypeScalarU64(SpirvEmitterState& state);
@@ -33,6 +34,9 @@ std::uint32_t TypeStorageBufferPointer(SpirvEmitterState& state);
 std::uint32_t TypeStorageBufferElementPointer(SpirvEmitterState& state);
 std::uint32_t TypeStorageBufferU64Pointer(SpirvEmitterState& state);
 std::uint32_t TypeStorageBufferU64ElementPointer(SpirvEmitterState& state);
+std::uint32_t TypeStorageBufferU8Block(SpirvEmitterState& state);
+std::uint32_t TypeStorageBufferU8Pointer(SpirvEmitterState& state);
+std::uint32_t TypeStorageBufferU8ElementPointer(SpirvEmitterState& state);
 std::uint32_t TypePhysicalU32Pointer(SpirvEmitterState& state);
 std::uint32_t TypePushConstantElementPointer(SpirvEmitterState& state);
 std::uint32_t TypeU32ArrayPointer(SpirvEmitterState& state, std::uint32_t storageClass, std::uint32_t dwords);
@@ -57,11 +61,14 @@ std::uint32_t ImageScalarType(SpirvEmitterState& state, IrTextureNumericClass nu
 std::uint32_t ImageVectorType(SpirvEmitterState& state, IrTextureNumericClass numericClass, std::uint32_t components);
 std::uint32_t ImageType(SpirvEmitterState& state, const ImageResource& image);
 std::uint32_t ImageViewSizeType(SpirvEmitterState& state, RdnaImageDimension dimension);
-std::uint32_t LoadSampledImageDescriptor(SpirvEmitterState& state, std::uint32_t resource, std::uint32_t slotId = 0);
+std::uint32_t LoadSampledImageDescriptor(SpirvEmitterState& state, std::uint32_t resource);
 std::uint32_t LoadSamplerDescriptor(SpirvEmitterState& state, std::uint32_t sampler);
-std::uint32_t MakeSampledImage(SpirvEmitterState& state, std::uint32_t resource, std::uint32_t sampler, std::uint32_t slotId = 0);
+std::uint32_t MakeSampledImage(SpirvEmitterState& state, std::uint32_t resource, std::uint32_t sampler);
+void DecorateTableNonUniform(SpirvEmitterState& state, std::uint32_t id);
+bool TablePointSampled(const ImageResource& image);
+bool TableModeEmitted(const ImageResource& mode);
 std::uint32_t StorageImageDescriptorPointer(SpirvEmitterState& state, std::uint32_t resource);
-void EmitStorageImageWrite(SpirvEmitterState& state, std::uint32_t resource, std::uint32_t mipLod, std::uint32_t coord, std::uint32_t texel);
+void EmitStorageImageWrite(SpirvEmitterState& state, std::uint32_t resource, std::uint32_t mipLod, std::uint32_t coord, std::uint32_t texel, std::uint32_t sample);
 std::uint32_t ExecutionModelForStage(IrShaderStage stage);
 std::uint32_t ConstantI32(SpirvEmitterState& state, std::int32_t value);
 std::uint32_t ConstantF32(SpirvEmitterState& state, std::uint32_t bits);
@@ -71,7 +78,7 @@ std::uint32_t ConstantBool(SpirvEmitterState& state, bool value);
 std::uint32_t ConstantU64(SpirvEmitterState& state, std::uint64_t value);
 std::uint32_t ConstantU32CompositeZero(SpirvEmitterState& state, std::uint32_t components);
 std::uint32_t DefineInterfaceVariable(SpirvEmitterState& state, std::uint32_t type, std::uint32_t storage, const char* name);
-void CheckBindings(const IrProgram& program, const BindingAllocationResult& bindings);
+void CheckBindings(const IrProgram& program, const CompiledBindingLayout& bindings);
 void EmitBaseHeader(SpirvModule& module, const IrProgram& program);
 void DefineInputs(SpirvEmitterState& state);
 void DefineOutputs(SpirvEmitterState& state);
@@ -90,6 +97,7 @@ DppTargetLane EmitDppRowRotateRightTargetLane(SpirvEmitterState& state, std::uin
 DppTargetLane EmitDppMirrorTargetLane(SpirvEmitterState& state, std::uint32_t subid, bool halfRow);
 DppTargetLane EmitDppTargetLane(SpirvEmitterState& state, std::uint32_t control);
 std::uint32_t InputVariableForKind(const SpirvEmitterState& state, StageInputKind kind);
+bool OrderedPixelShader(const SpirvEmitterState& state);
 const SpirvInputBinding* SpirvInputBindingForParameter(const SpirvEmitterState& state, std::uint32_t location);
 std::uint32_t EmitVertexParameterComponentU32(SpirvEmitterState& state, const SpirvInputBinding& input, std::uint32_t component);
 std::uint32_t EmitInputComponentU32(SpirvEmitterState& state, StageInputKind kind, std::uint32_t component);
@@ -98,15 +106,16 @@ std::uint32_t EmitBallotLaneActiveBool(SpirvEmitterState& state, std::uint32_t b
 std::uint32_t EmitSubgroupLaneActiveBool(SpirvEmitterState& state, std::uint32_t lane);
 std::uint32_t EmitBinaryU32(SpirvEmitterState& state, std::uint32_t opcode, std::uint32_t lhs, std::uint32_t rhs);
 std::uint32_t EmitShaderDataDwordLoad(SpirvEmitterState& state, std::uint32_t dwordIndex);
-std::uint32_t StorageBufferPackedStride(const SpirvEmitterState& state, const MemoryInfo& mem);
-IrBufferFormat StorageBufferFormat(const SpirvEmitterState& state, const MemoryInfo& mem);
 void EmitMemoryOffsets(SpirvEmitterState& state);
 std::uint32_t LdsDwordCount(const SpirvEmitterState& state);
+bool LdsInDeviceMemory(const SpirvEmitterState& state);
+std::uint32_t LdsMemorySemantics(const SpirvEmitterState& state);
+void EmitLdsBufferBase(SpirvEmitterState& state);
 std::uint32_t EmitLdsLockPointer(SpirvEmitterState& state);
 MemoryResourceAccess PrepareMemoryResourceAccess(SpirvEmitterState& state, const MemoryInfo& mem);
-MemoryResourceAccess PrepareStorageBufferResourceAccess(SpirvEmitterState& state, const MemoryInfo& mem, std::uint32_t variable, std::uint32_t pointerType);
 std::uint32_t EmitMemoryElementIndex(SpirvEmitterState& state, const MemoryResourceAccess& access, std::uint32_t rawIndex);
 std::uint32_t EmitMemoryElementInBounds(SpirvEmitterState& state, const MemoryResourceAccess& access, std::uint32_t index);
+bool InFunctionStorage(const SpirvEmitterState& state, ResourceKind kind);
 std::uint32_t EmitMemoryElementPointer(SpirvEmitterState& state, const MemoryResourceAccess& access, std::uint32_t index);
 std::uint32_t EmitStorageBufferElementPointer(SpirvEmitterState& state, const MemoryResourceAccess& access, std::uint32_t index, std::uint32_t pointerType);
 std::uint32_t EmitTBufferBitcastU32ToI32(SpirvEmitterState& state, std::uint32_t value);
@@ -130,11 +139,14 @@ F32Class EmitClassifyF32(SpirvEmitterState& state, std::uint32_t value);
 std::uint32_t EmitClassMaskBitMatch(SpirvEmitterState& state, std::uint32_t mask, std::uint32_t bit, std::uint32_t classMatch);
 std::uint32_t EmitClassMaskF32(SpirvEmitterState& state, std::uint32_t value, std::uint32_t mask);
 std::uint32_t EmitMinMaxF32Value(SpirvEmitterState& state, std::uint32_t lhs, std::uint32_t rhs, bool maxValue);
-std::uint32_t EmitFlushF32DenormToSignedZero(SpirvEmitterState& state, std::uint32_t value);
 std::uint32_t EmitTrigCycleF32(SpirvEmitterState& state, std::uint32_t src, bool preserveSignedZero);
+void EmitF16DenormPreserve(SpirvEmitterState& state);
 std::uint32_t EmitF16BitsToF32(SpirvEmitterState& state, std::uint32_t bits);
+std::uint32_t EmitF16BitsToF32AnyNan(SpirvEmitterState& state, std::uint32_t bits);
+std::uint32_t EmitF16BitsToF32Decoded(SpirvEmitterState& state, std::uint32_t bits);
 void EmitProgram(SpirvEmitterState& state);
 void DefineGetBdaPointer(SpirvEmitterState& state);
+void DefineDot2F32F16Function(SpirvEmitterState& state);
 void EmitLabel(SpirvEmitterState& state, std::uint32_t label);
 std::uint32_t Unary(SpirvEmitterState& state, std::uint32_t opcode, std::uint32_t type, std::uint32_t value);
 std::uint32_t Binary(SpirvEmitterState& state, std::uint32_t opcode, std::uint32_t type, std::uint32_t lhs, std::uint32_t rhs);
@@ -225,10 +237,10 @@ std::uint32_t EmitValueIfElse(SpirvEmitterState& state, std::uint32_t condition,
 template<typename TFunction>
 std::uint32_t AtomicUpdateTyped(SpirvEmitterState& state, std::uint32_t pointer, ResourceKind kind, std::uint32_t type, TFunction&& function) {
     const auto scope = kind == ResourceKind::Lds ? spv::ScopeWorkgroup : spv::ScopeDevice;
-    const auto memory = [&]() {
+    const auto memory = [&]() -> std::uint32_t {
         switch (kind) {
         case ResourceKind::Lds:
-            return spv::MemorySemanticsWorkgroupMemoryMask;
+            return LdsMemorySemantics(state);
         case ResourceKind::Image:
             return spv::MemorySemanticsImageMemoryMask;
         default:

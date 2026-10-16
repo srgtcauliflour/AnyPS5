@@ -16,6 +16,23 @@ struct alignas(16) __m128 { float v[4]; };
 
 using Bool = std::uint8_t;
 
+struct SonyLconv {
+    char* monetary[7];
+    char chars[14];
+    char pad[2];
+    char* decimal_point;
+    char* grouping;
+    char* thousands_sep;
+    char* frac_grouping;
+    char* frac_sep;
+    char* false_text;
+    char* true_text;
+    char* no_text;
+    char* yes_text;
+};
+static_assert(offsetof(SonyLconv, decimal_point) == 0x48);
+static_assert(sizeof(SonyLconv) == 0x90);
+
 using KernelModule = std::int32_t;
 using KernelCpumask = std::uint64_t;
 using KernelUseconds = unsigned int;
@@ -78,6 +95,14 @@ struct KernelAioRwRequest {
     std::int32_t fd;
 };
 
+struct KernelAioSchedulingParam {
+    std::int32_t schedulingWindowSize;
+    std::int32_t delayedCountLimit;
+    std::uint32_t enableSplit;
+    std::uint32_t splitSize;
+    std::uint32_t splitChunkSize;
+};
+
 struct KernelBatchMapEntry {
     void* start;
     std::uint64_t offset;
@@ -135,18 +160,23 @@ struct VirtualQueryInfo {
     std::uint64_t offset;
     std::int32_t protection;
     std::int32_t memory_type;
-    std::uint32_t is_flexible : 1;
-    std::uint32_t is_direct : 1;
-    std::uint32_t is_stack : 1;
-    std::uint32_t is_pooled : 1;
-    std::uint32_t is_committed : 1;
-    std::uint32_t is_gpu_prt : 1;
-    std::uint32_t amm_usage : 1;
-    std::uint32_t reserved : 1;
+    std::uint8_t is_flexible : 1;
+    std::uint8_t is_direct : 1;
+    std::uint8_t is_stack : 1;
+    std::uint8_t is_pooled : 1;
+    std::uint8_t is_committed : 1;
+    std::uint8_t is_gpu_prt : 1;
+    std::uint8_t amm_usage : 1;
+    std::uint8_t reserved : 1;
     char name[32];
     std::uint8_t gpu_mask_id;
     std::uint8_t reserved2;
 };
+static_assert(sizeof(VirtualQueryInfo) == 72);
+static_assert(alignof(VirtualQueryInfo) == 8);
+static_assert(offsetof(VirtualQueryInfo, name) == 33);
+static_assert(offsetof(VirtualQueryInfo, gpu_mask_id) == 65);
+static_assert(offsetof(VirtualQueryInfo, reserved2) == 66);
 
 struct KernelSemaPrivate;
 struct KernelEventFlagPrivate;
@@ -205,6 +235,19 @@ struct ModuleSegmentInfo {
     std::int32_t prot;
 };
 
+struct ModuleInfo {
+    std::uint64_t st_size;
+    char name[256];
+    ModuleSegmentInfo segments[4];
+    std::uint32_t segment_count;
+    std::uint8_t fingerprint[20];
+};
+static_assert(offsetof(ModuleInfo, name) == 0x8);
+static_assert(offsetof(ModuleInfo, segments) == 0x108);
+static_assert(offsetof(ModuleInfo, segment_count) == 0x148);
+static_assert(offsetof(ModuleInfo, fingerprint) == 0x14C);
+static_assert(sizeof(ModuleInfo) == 0x160);
+
 struct ModuleInfoEx {
     std::uint64_t st_size;
     char name[256];
@@ -241,6 +284,12 @@ struct ModuleInfoForUnwind {
     std::uint64_t seg0_addr;
     std::uint64_t seg0_size;
 };
+
+struct InternalSegmentInfo {
+    std::uint64_t address;
+    std::uint64_t size;
+};
+static_assert(sizeof(InternalSegmentInfo) == 0x10);
 
 struct MallocReplace {
     std::uint64_t size = sizeof(MallocReplace);
@@ -532,6 +581,13 @@ struct Audio3dOpenParameters {
     std::uint32_t buffer_mode;
     std::uint32_t pad;
     std::uint32_t num_beds;
+};
+
+struct Audio3dAttribute {
+    std::uint32_t attribute_id;
+    std::uint32_t pad;
+    const void* value;
+    std::uint64_t value_size;
 };
 
 using AudioPropagationHandle = std::uint64_t;
@@ -1130,7 +1186,7 @@ struct ImeEvent {
     ImeEventParam param;
 };
 
-using EventHandler = void (*)(void* arg, const ImeEvent* event);
+using EventHandler = void (APS5_VABI *)(void* arg, const ImeEvent* event);
 
 struct Param {
     std::int32_t user_id;
@@ -1214,11 +1270,21 @@ struct NetCtlNatInfo { std::uint8_t opaque[128]; };
 
 union NetCtlInfo { std::uint8_t opaque[256]; };
 
+struct NetCtlIfStat {
+    std::uint32_t device;
+    std::uint64_t tx_bytes;
+    std::uint64_t rx_bytes;
+    std::uint32_t reserved[8];
+};
+
 using NetCtlCallback = void (*)(int, void*);
 
-struct HttpEpoll {};
+struct HttpEpoll;
 using HttpEpollHandle = HttpEpoll*;
 using HttpsCallback = int (*)(int, unsigned int, void* const*, int, void*);
+using HttpRedirectCallback = int (*)(int, std::int32_t, std::int32_t*, const char*, void*);
+using HttpCookieRecvCallback = int (*)(int, const char*, const char*, std::uint64_t, void*);
+using HttpAuthInfoCallback = int (*)(int, int, const char*, char*, char*, int, std::uint8_t**, std::uint64_t*, int*, void*);
 
 struct HttpNBEvent { std::uint8_t opaque[64]; };
 
@@ -1243,10 +1309,30 @@ struct Http2AsyncResult {
     void* reserved;
 };
 
+struct Http2AsyncOption {
+    KernelEqueue equeue;
+    int user_event_id;
+    std::uint8_t padding[4];
+    void* user_data;
+    void* reserved;
+};
+
 struct NpTitleId { char data[13]; char pad[3]; };
 struct NpTitleSecret { std::uint8_t data[128]; };
 struct NpContentRestriction { std::uint8_t opaque[128]; };
 struct NpOnlineId { char data[17]; char pad[3]; };
+
+struct SharePlayConnectionInfoA {
+    std::int32_t status;
+    std::int32_t mode;
+    NpOnlineId hostOnlineId;
+    NpOnlineId visitorOnlineId;
+    std::uint64_t hostAccountId;
+    std::uint64_t visitorAccountId;
+    std::int32_t hostUserId;
+    std::int32_t visitorUserId;
+};
+static_assert(sizeof(SharePlayConnectionInfoA) == 72 && offsetof(SharePlayConnectionInfoA, hostAccountId) == 48 && offsetof(SharePlayConnectionInfoA, hostUserId) == 64);
 struct NpId { NpOnlineId online_id; std::uint8_t opaque[4]; };
 struct NpCreateAsyncRequestParameter { std::uint8_t opaque[64]; };
 struct NpCheckPremiumParameter { std::uint8_t opaque[64]; };
@@ -1264,6 +1350,10 @@ struct NpEntitlementAccessAddcontEntitlementInfo {
     NpUnifiedEntitlementLabel entitlement_label;
     std::uint32_t package_type;
     std::uint32_t download_status;
+};
+
+struct NpEntitlementAccessEntitlementKey {
+    std::uint8_t data[16];
 };
 
 
@@ -1375,9 +1465,20 @@ struct SaveDataMountInfo {
 };
 
 struct SceSaveDataTitleId { char data[10]; char pad[2]; };
-struct SceSaveDataDirName { char data[33]; char pad[3]; };
-struct SaveDataSearchInfo { std::uint8_t opaque[128]; };
-struct SaveDataMemoryData { void* buf; std::size_t buf_size; std::size_t offset; };
+struct SceSaveDataDirName { char data[32]; };
+struct SaveDataSearchInfo {
+    std::uint64_t blocks;
+    std::uint64_t free_blocks;
+    std::uint8_t reserved[32];
+};
+static_assert(sizeof(SaveDataSearchInfo) == 48);
+struct SaveDataMemoryData {
+    void* buf;
+    std::size_t buf_size;
+    std::size_t offset;
+    std::uint8_t reserved[40];
+};
+static_assert(sizeof(SaveDataMemoryData) == 64);
 
 struct SaveDataMount3 {
     int user_id;
@@ -1499,6 +1600,13 @@ struct SaveDataBackup {
     std::uint8_t reserved[32];
 };
 
+struct SaveDataConvert {
+    std::int32_t user_id;
+    std::int32_t pad;
+    const SceSaveDataDirName* dir_name;
+    std::uint8_t unknown[48];
+};
+
 struct AppContentInitParam { char reserved[32]; };
 
 struct AppContentBootParam {
@@ -1518,7 +1626,49 @@ struct ContentExportInitParam2 {
     std::int64_t reserved1;
 };
 
+struct ContentExportParam {
+    char title[257];
+    char comment[257];
+    char content_type[65];
+};
+static_assert(sizeof(ContentExportParam) == 579);
+
+struct ContentExportCallbackParam {
+    std::size_t content_length;
+    void* func;
+    void* user_data;
+};
+
 struct ContentSearchInitParam { std::size_t memory_size; };
+
+struct ContentSearchColumnValue {
+    std::uint32_t size;
+    std::int64_t value;
+};
+
+struct ContentSearchContentColumn {
+    std::int32_t column_type;
+    std::int32_t column_operator;
+    const ContentSearchColumnValue* value;
+    std::int32_t logical_connector;
+};
+
+struct ContentSearchContentColumnSet {
+    const ContentSearchContentColumn* columns;
+    std::int32_t columns_length;
+    std::int32_t logical_connector;
+};
+
+struct ContentSearchContentOrderByCondition {
+    std::int32_t column_type;
+    std::int32_t sort_type;
+};
+
+static_assert(sizeof(ContentSearchColumnValue) == 16);
+static_assert(sizeof(ContentSearchContentColumn) == 24);
+static_assert(offsetof(ContentSearchContentColumn, logical_connector) == 16);
+static_assert(sizeof(ContentSearchContentColumnSet) == 16);
+static_assert(sizeof(ContentSearchContentOrderByCondition) == 8);
 
 struct PngEncCreateParam {
     std::uint32_t this_size;
@@ -1611,23 +1761,29 @@ struct JpegEncOutputInfo {
 };
 
 struct JpegDecCreateParam {
-    std::uint32_t size;
+    std::uint32_t this_size;
     std::uint32_t attribute;
+    std::uint32_t max_image_width;
 };
 
 struct JpegDecParseParam {
     const void* jpeg_mem_addr;
     std::uint32_t jpeg_mem_size;
-    std::uint32_t reserved0;
+    std::uint16_t decode_mode;
+    std::uint16_t down_scale;
 };
 
 struct JpegDecDecodeParam {
     const void* jpeg_mem_addr;
     void* image_mem_addr;
+    void* coefficient_mem_addr;
     std::uint32_t jpeg_mem_size;
     std::uint32_t image_mem_size;
+    std::uint32_t coefficient_mem_size;
+    std::uint16_t decode_mode;
+    std::uint16_t down_scale;
     std::uint16_t pixel_format;
-    std::uint16_t reserved0;
+    std::uint16_t alpha_value;
     std::uint32_t image_pitch;
 };
 
@@ -1635,8 +1791,13 @@ struct JpegDecImageInfo {
     std::uint32_t image_width;
     std::uint32_t image_height;
     std::uint16_t color_space;
-    std::uint16_t bit_depth;
-    std::uint32_t image_flag;
+    std::uint16_t component_number;
+    std::uint8_t component_id[4];
+    std::uint8_t sampling_factor[4];
+    std::uint32_t coefficient_mem_size;
+    std::uint32_t suitable_csc_attribute;
+    std::uint32_t output_image_width;
+    std::uint32_t output_image_height;
 };
 
 struct PlayGoInitParams {
@@ -1812,6 +1973,19 @@ struct VideoOutOutputStatus {
     std::uint64_t reserved[3] = {};
 };
 
+struct VideoOutResolutionStatus {
+    std::uint32_t fullWidth = 0;
+    std::uint32_t fullHeight = 0;
+    std::uint32_t paneWidth = 0;
+    std::uint32_t paneHeight = 0;
+    std::uint64_t refreshRate = 0;
+    float screenSizeInInch = 0.0f;
+    std::uint16_t flags = 0;
+    std::uint16_t reserved0 = 0;
+    std::uint32_t reserved1[3] = {};
+};
+static_assert(sizeof(VideoOutResolutionStatus) == 48 && offsetof(VideoOutResolutionStatus, refreshRate) == 16 && offsetof(VideoOutResolutionStatus, screenSizeInInch) == 24);
+
 struct VideoOutOutputOptions { std::uint32_t internalData[16] = {}; };
 
 struct VideoOutColorSettings {
@@ -1837,12 +2011,6 @@ struct LibcHeapInfo {
 };
 
 using Info = LibcHeapInfo;
-
-#define VA_ARGS \
-    std::uint64_t rdi, std::uint64_t rsi, std::uint64_t rdx, std::uint64_t rcx, \
-    std::uint64_t r8, std::uint64_t r9, std::uint64_t overflow_arg_area, \
-    __m128 xmm0, __m128 xmm1, __m128 xmm2, __m128 xmm3, \
-    __m128 xmm4, __m128 xmm5, __m128 xmm6, __m128 xmm7, ...
 
 struct Packet {
     std::uint32_t* addr;

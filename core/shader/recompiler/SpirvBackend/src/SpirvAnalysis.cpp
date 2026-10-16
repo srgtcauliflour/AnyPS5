@@ -1,4 +1,5 @@
 #include "SpirvBackend/SpirvAnalysis.hpp"
+#include "RdnaDecoder/RdnaInstruction.hpp"
 #include <algorithm>
 #include <optional>
 #include <stdexcept>
@@ -8,6 +9,30 @@
 namespace ShaderRecompiler {
 
 namespace {
+
+bool ReadsNeighbourLanes(const IrProgram& program, const IrValue& inst) {
+    switch (inst.Opcode()) {
+    case IrOpcode::ImageQueryLod:
+    case IrOpcode::DppMoveU32:
+    case IrOpcode::DppUpdateU32:
+    case IrOpcode::SwizzleU32:
+    case IrOpcode::BpermuteU32:
+    case IrOpcode::PermuteU32:
+    case IrOpcode::Permlane16U32:
+    case IrOpcode::ReadLane:
+    case IrOpcode::ReadFirstLane:
+    case IrOpcode::Ballot:
+    case IrOpcode::WqmU64:
+        return true;
+    case IrOpcode::ImageSampleImplicitLod:
+    case IrOpcode::ImageSampleRaw: {
+        const auto flags = program.Resources().memoryInfo.at(inst.Flags<MemoryFlags>().index).imageSampleFlags;
+        return (flags & (RdnaImageSampleFlagDerivative | RdnaImageSampleFlagLod | RdnaImageSampleFlagLevelZero)) == 0u;
+    }
+    default:
+        return false;
+    }
+}
 
 bool UniformSource(const IrValue& value) {
     switch (value.Opcode()) {
@@ -37,6 +62,7 @@ bool LaneSource(const IrProgram& program, const IrValue& value) {
     case IrOpcode::LaneId:
     case IrOpcode::GetAttribute:
     case IrOpcode::GetInterpolationParameter:
+    case IrOpcode::GetInterpolationParameterF16:
     case IrOpcode::GetTessellationAttribute:
     case IrOpcode::DppMoveU32:
     case IrOpcode::DppUpdateU32:
@@ -47,6 +73,8 @@ bool LaneSource(const IrProgram& program, const IrValue& value) {
     case IrOpcode::WriteLane:
     case IrOpcode::DataAppend:
     case IrOpcode::DataConsume:
+    case IrOpcode::LoadVectorWindow:
+    case IrOpcode::DataOrderedCount:
         return true;
     case IrOpcode::GetBuiltin: {
         const auto* kind = value.Argument(0)->Resolve();
@@ -222,11 +250,17 @@ std::uint32_t FunctionLdsDwords(const IrProgram& program) {
     std::uint64_t needed = 0;
     for (const IrBlock* block : program.BlockOrder()) {
         for (const IrValue* inst : block->Instructions()) {
-            if (SharedAccessOf(inst->Opcode()) == SharedAccess::None) continue;
+            const auto access = SharedAccessOf(inst->Opcode());
+            if (access == SharedAccess::None) continue;
             const auto index = inst->Flags<MemoryFlags>().index;
             if (index >= program.Resources().memoryInfo.size()) return FunctionLdsDwordLimit;
             const auto& memory = program.Resources().memoryInfo[index];
             if (memory.kind != ResourceKind::Lds) continue;
+            if (access == SharedAccess::Append || access == SharedAccess::Consume) {
+                needed = std::max<std::uint64_t>(needed, (std::uint64_t{memory.offset} >> 2u) + 1u);
+                if (needed >= FunctionLdsDwordLimit) return FunctionLdsDwordLimit;
+                continue;
+            }
             const auto dwords = SharedAccessDwords(inst->Opcode());
             if (dwords == 0u || inst->ArgumentCount() == 0) return FunctionLdsDwordLimit;
             const auto address = bound.Of(inst->Argument(0));
@@ -324,6 +358,13 @@ SpirvRequirements AnalyzeProgramRequirements(const IrProgram& program) {
                     }
                     requirements.functionScratch = true;
                 }
+                if (program.Resources().memoryInfo.at(memoryIndex).kind == ResourceKind::Flat && program.Resources().stage == IrShaderStage::Compute && program.Info().scratchDwords != 0u) {
+                    requirements.functionScratch = true;
+                }
+                if (program.Resources().memoryInfo.at(memoryIndex).kind == ResourceKind::Flat && program.Resources().stage == IrShaderStage::Compute && addressAccess == AddressAccess::Atomic && inst->Type() == IrType::U64) {
+                    requirements.ldsLock = true;
+                    requirements.subgroupBallot = true;
+                }
             }
             if (BufferAccessOf(inst->Opcode()) != BufferAccess::None) {
                 const auto memoryIndex = inst->Flags<MemoryFlags>().index;
@@ -332,21 +373,8 @@ SpirvRequirements AnalyzeProgramRequirements(const IrProgram& program) {
                 }
                 const auto& memory = program.Resources().memoryInfo.at(memoryIndex);
                 requirements.coherentBuffers = requirements.coherentBuffers || (memory.coherent && !memory.gpuDescriptor);
-                if (memory.gpuDescriptor) {
-                    if (program.Resources().stage != IrShaderStage::Compute) {
-                        throw std::runtime_error("GPU-selected buffer descriptors outside compute shaders are not implemented");
-                    }
-                    requirements.subgroupLocalInvocationId = true;
-                } else if (memory.kind == ResourceKind::Buffer) {
-                    if (memory.resource >= program.Info().buffers.size()) {
-                        throw std::runtime_error("buffer operation has invalid resource metadata");
-                    }
-                    if ((program.Info().buffers.at(memory.resource).packedStride & (1u << 20u)) != 0u) {
-                        if (program.Resources().stage != IrShaderStage::Compute) {
-                            throw std::runtime_error("buffer ADD_TID is only valid for compute shaders");
-                        }
-                        requirements.subgroupLocalInvocationId = true;
-                    }
+                if (!memory.planningOnly) {
+                    requirements.subgroupLocalInvocationId = requirements.subgroupLocalInvocationId || program.Resources().stage == IrShaderStage::Compute;
                 }
             }
             const auto sharedAccess = SharedAccessOf(inst->Opcode());
@@ -374,6 +402,7 @@ SpirvRequirements AnalyzeProgramRequirements(const IrProgram& program) {
                     requirements.subgroupLocalInvocationId = true;
                 }
             }
+            requirements.neighbourLaneReads = requirements.neighbourLaneReads || ReadsNeighbourLanes(program, *inst);
             switch (inst->Opcode()) {
             case IrOpcode::Ballot:
                 requirements.subgroupBallot = true;
@@ -449,6 +478,7 @@ SpirvRequirements AnalyzeProgramRequirements(const IrProgram& program) {
             requirements.functionLdsDwords = static_cast<std::uint32_t>(std::max<std::uint64_t>((needed + 63u) & ~63ull, 64u));
         }
     }
+    requirements.coherentBufferAlias = requirements.coherentBuffers && !program.Metadata().invalidatesCaches;
     return requirements;
 }
 
