@@ -31,8 +31,12 @@ GuestRuntime GuestRuntime::load(std::span<const std::uint8_t> image,
         throw std::invalid_argument("Invalid AG64 data/stack size");
     const auto stackBase = static_cast<std::size_t>(dataBase) + dataSize + 4096;
     const auto memorySize = stackBase + stackSize;
-    std::vector<std::uint8_t> code(image.begin() + 20,
-                                   image.begin() + 20 + codeSize);
+    // A five-byte entry trampoline preserves existing CPU IP semantics.
+    std::vector<std::uint8_t> code{0xE9};
+    const auto displacement = static_cast<std::uint32_t>(entry);
+    for (unsigned i = 0; i < 4; ++i)
+        code.push_back(static_cast<std::uint8_t>(displacement >> (8 * i)));
+    code.insert(code.end(), image.begin() + 20, image.begin() + 20 + codeSize);
     GuestRuntime runtime(std::move(code), memorySize, dataSize, stackBase);
     // Initialize only mapped data; the guard page is intentionally unmapped.
     for (std::size_t i = 0; i < dataSize; i += 4) {
@@ -42,10 +46,6 @@ GuestRuntime GuestRuntime::load(std::span<const std::uint8_t> image,
         runtime.cpu_.writeMemory32(dataBase + i, word);
     }
     runtime.cpu_.setRegister(4, memorySize);
-    // Entry offset is encoded by prepending a near jump in the next
-    // revision; v1 currently only supports entry zero.
-    if (entry != 0)
-        throw std::invalid_argument("AG64 v1 requires entry offset zero");
     return runtime;
 }
 std::uint64_t GuestRuntime::run(std::size_t instructionLimit) {
