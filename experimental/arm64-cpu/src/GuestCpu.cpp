@@ -1,5 +1,6 @@
 #include "GuestCpu.hpp"
 #include <limits>
+#include <string>
 
 namespace anyps5::experimental {
 GuestCpu::GuestCpu(std::span<const std::uint8_t> program, std::size_t stackBytes)
@@ -739,7 +740,9 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
                 if (evaluateCondition(second & 0x0F)) jumpRelative(displacement);
                 continue;
             }
-            throw std::runtime_error("Unsupported two-byte guest instruction");
+            throw std::runtime_error("Unsupported two-byte guest opcode 0F " +
+                std::to_string(static_cast<unsigned>(second)) +
+                " at offset " + std::to_string(ip_ - 2));
         }
         if (opcode == 0xC9) {
             if (wide || extended || rexR || rexX)
@@ -815,7 +818,9 @@ std::uint64_t GuestCpu::run(std::size_t maxInstructions) {
             if (evaluateCondition(opcode & 0x0F)) jumpRelative(offset);
             continue;
         }
-        throw std::runtime_error("Unsupported guest instruction");
+        throw std::runtime_error("Unsupported guest opcode " +
+            std::to_string(static_cast<unsigned>(opcode)) +
+            " at offset " + std::to_string(ip_ - 1));
     }
     throw std::runtime_error("Guest instruction limit exceeded");
 }
