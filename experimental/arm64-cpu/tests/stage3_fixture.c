@@ -74,3 +74,12 @@ __attribute__((noinline)) unsigned fixture_array_sort(unsigned* a, unsigned n) {
     for (unsigned i = 0; i < n; ++i) checksum += a[i];
     return checksum;
 }
+
+/* Recursive factorial via an explicit callback. No symbol relocations:
+ * native code receives a native callback; guest code receives a guest
+ * trampoline address and uses an indirect call. */
+__attribute__((noinline)) unsigned fixture_recursive_factorial(
+    unsigned n, unsigned (*recurse)(unsigned)) {
+    if (n <= 1u) return 1u;
+    return n * recurse(n - 1u);
+}
