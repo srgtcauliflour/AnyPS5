@@ -11,6 +11,11 @@ class GuestCpu {
 public:
     explicit GuestCpu(std::span<const std::uint8_t> program, std::size_t stackBytes = 65536);
     std::uint64_t run(std::size_t maxInstructions = 10000);
+    // Configure a bounded data region separate from the guest stack.
+    // Legacy single-region execution remains the default.
+    void setMemoryRegions(std::size_t dataBegin, std::size_t dataEnd,
+                          std::size_t stackBegin);
+    void setRegister(std::size_t index, std::uint64_t value);
     std::uint64_t rax() const noexcept;
     std::uint64_t registerValue(std::size_t index) const;
     std::size_t instructionPointer() const noexcept;
@@ -21,6 +26,11 @@ public:
 private:
     std::vector<std::uint8_t> program_;
     std::vector<std::uint8_t> memory_;
+    bool regionProtection_ = false;
+    std::size_t dataBegin_ = 0;
+    std::size_t dataEnd_ = 0;
+    std::size_t stackBegin_ = 0;
+    void checkMemory(std::uint64_t address, std::size_t bytes, bool write) const;
     std::array<std::uint64_t, 16> registers_{};
     std::size_t ip_ = 0;
     bool zeroFlag_ = false;
