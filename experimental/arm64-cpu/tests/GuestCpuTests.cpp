@@ -341,5 +341,21 @@ int main() {
         std::fprintf(stderr, "Invalid LEA was accepted at line %d\\n", __LINE__);
         return EXIT_FAILURE;
     }
+
+    // Compiled from tests/compiler_fixture.c with Clang -O1 targeting x86-64.
+    // 8D 47 02 = lea eax,[rdi+2]; C3 = ret.
+    // The caller sets EDI=40 and CALLs the compiler-produced function.
+    const std::array<std::uint8_t, 15> actualCompilerFixture{
+        0xBF, 40, 0, 0, 0,        // mov edi,40
+        0xE8, 0x01, 0, 0, 0,      // call guest_add_two
+        0xC3,                    // caller ret
+        0x8D, 0x47, 0x02, 0xC3  // compiled .text from fixture
+    };
+    GuestCpu actualCompilerCpu(actualCompilerFixture, 64);
+    if (actualCompilerCpu.run() != 42 || actualCompilerCpu.registerValue(4) != 64) {
+        std::fprintf(stderr, "Real compiler fixture failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
     return EXIT_SUCCESS;
 }
