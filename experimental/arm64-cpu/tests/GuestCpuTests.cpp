@@ -829,5 +829,53 @@ int main() {
         return EXIT_FAILURE;
     }
 
+    // M16: real Clang -O1 x86-64 output from compiler_fixture.c.
+    // Prefix sets the SysV integer argument in EDI before entering the function.
+    const auto compiledSumSix = std::to_array<std::uint8_t>({
+        0xBF, 6, 0, 0, 0,       // mov edi,6
+        0x85, 0xFF, 0x7E, 0x13, // test edi,edi; jle +19
+        0x8D, 0x47, 0xFF,       // lea eax,[rdi-1]
+        0x8D, 0x4F, 0xFE,       // lea ecx,[rdi-2]
+        0x48, 0x0F, 0xAF, 0xC8, // imul rcx,rax
+        0x48, 0xD1, 0xE9,       // shr rcx,1
+        0x8D, 0x04, 0x79,       // lea eax,[rcx+rdi*2]
+        0xFF, 0xC8, 0xC3,       // dec eax; ret
+        0x31, 0xC0, 0xC3        // xor eax,eax; ret (n <= 0)
+    });
+    if (GuestCpu(compiledSumSix).run() != 21) {
+        std::fprintf(stderr, "M16 compiled sum positive case failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    auto compiledSumZero = compiledSumSix;
+    compiledSumZero[1] = 0;
+    if (GuestCpu(compiledSumZero).run() != 0) {
+        std::fprintf(stderr, "M16 compiled sum zero case failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    auto compiledSumNegative = compiledSumSix;
+    compiledSumNegative[1] = 0xFF;
+    compiledSumNegative[2] = 0xFF;
+    compiledSumNegative[3] = 0xFF;
+    compiledSumNegative[4] = 0xFF;
+    if (GuestCpu(compiledSumNegative).run() != 0) {
+        std::fprintf(stderr, "M16 compiled sum negative case failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
+    // Clang -O1 output uses LEA with a SIB displacement, SHR, OR,
+    // and MOVZX DIL to implement this bit-manipulation function.
+    const auto compiledBitmix = std::to_array<std::uint8_t>({
+        0xBF, 0x23, 0x01, 0, 0,       // mov edi,0x123
+        0x8D, 0x04, 0xBD, 0, 0, 0, 0, // lea eax,[rdi*4]
+        0xC1, 0xEF, 3,               // shr edi,3
+        0x09, 0xC7,                  // or edi,eax
+        0x40, 0x0F, 0xB6, 0xC7,     // movzx eax,dil
+        0xC3
+    });
+    if (GuestCpu(compiledBitmix).run() != 0xAC) {
+        std::fprintf(stderr, "M16 compiled bitmix failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
     return EXIT_SUCCESS;
 }
