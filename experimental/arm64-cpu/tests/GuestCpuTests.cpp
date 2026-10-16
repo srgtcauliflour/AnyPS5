@@ -995,5 +995,79 @@ int main() {
         return EXIT_FAILURE;
     }
 
+    // M21: compiler-common unary NOT/NEG operations and flag semantics.
+    const auto unaryNot = std::to_array<std::uint8_t>({
+        0xB8, 0xD5, 0xFF, 0xFF, 0xFF, // eax=-43
+        0xF7, 0xD0,                   // not eax -> 42
+        0xC3
+    });
+    if (GuestCpu(unaryNot).run() != 42) {
+        std::fprintf(stderr, "M21 NOT failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto unaryNeg = std::to_array<std::uint8_t>({
+        0xB8, 0xD6, 0xFF, 0xFF, 0xFF, // eax=-42
+        0xF7, 0xD8,                   // neg eax -> 42
+        0xC3
+    });
+    if (GuestCpu(unaryNeg).run() != 42) {
+        std::fprintf(stderr, "M21 NEG failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto negCarry = std::to_array<std::uint8_t>({
+        0xB8, 1, 0, 0, 0, 0xF7, 0xD8, // neg eax -> -1, CF=1
+        0x0F, 0x92, 0xC0, 0xC3       // setc al
+    });
+    if (GuestCpu(negCarry).run() != 0xFFFFFF01u) {
+        std::fprintf(stderr, "M21 NEG carry failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto negOverflow = std::to_array<std::uint8_t>({
+        0xB8, 0, 0, 0, 0x80, 0xF7, 0xD8, // neg INT32_MIN -> overflow
+        0x0F, 0x90, 0xC1,                 // seto cl
+        0x0F, 0xB6, 0xC1, 0xC3            // movzx eax,cl
+    });
+    if (GuestCpu(negOverflow).run() != 1) {
+        std::fprintf(stderr, "M21 NEG overflow failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto notPreservesCarry = std::to_array<std::uint8_t>({
+        0xB8, 1, 0, 0, 0, 0xF7, 0xD8, // neg eax -> CF=1
+        0xF7, 0xD0,                   // not eax; flags unchanged
+        0x0F, 0x92, 0xC1,             // setc cl
+        0x0F, 0xB6, 0xC1, 0xC3
+    });
+    if (GuestCpu(notPreservesCarry).run() != 1) {
+        std::fprintf(stderr, "M21 NOT flags failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto negWide = std::to_array<std::uint8_t>({
+        0x48, 0xB8, 0xD6, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0x48, 0xF7, 0xD8, 0xC3
+    });
+    if (GuestCpu(negWide).run() != 42) {
+        std::fprintf(stderr, "M21 wide NEG failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto negMemory = std::to_array<std::uint8_t>({
+        0xB8, 42, 0, 0, 0,
+        0x89, 0x44, 0x24, 0xF8, // mov [rsp-8],eax
+        0xF7, 0x54, 0x24, 0xF8, // not [rsp-8]
+        0xF7, 0x54, 0x24, 0xF8, // not [rsp-8] again
+        0x8B, 0x44, 0x24, 0xF8, 0xC3
+    });
+    if (GuestCpu(negMemory, 64).run() != 42) {
+        std::fprintf(stderr, "M21 memory NOT failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    const auto unsupportedF7 = std::to_array<std::uint8_t>({0xF7, 0xF0, 0xC3});
+    rejected = false;
+    try { GuestCpu(unsupportedF7).run(); }
+    catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) {
+        std::fprintf(stderr, "M21 unsupported F7 accepted at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
     return EXIT_SUCCESS;
 }
