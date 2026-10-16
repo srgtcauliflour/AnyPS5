@@ -515,5 +515,48 @@ int main() {
         return EXIT_FAILURE;
     }
 
+    // M11: compiler-style bit masking and merging.
+    const auto andOrRegisters = std::to_array<std::uint8_t>({
+        0xB8, 0x3F, 0, 0, 0,    // mov eax,63
+        0xB9, 0x0A, 0, 0, 0,    // mov ecx,10
+        0x23, 0xC1,             // and eax,ecx -> 10
+        0xB9, 0x20, 0, 0, 0,    // mov ecx,32
+        0x0B, 0xC1,             // or eax,ecx -> 42
+        0xC3
+    });
+    if (GuestCpu(andOrRegisters).run() != 42) {
+        std::fprintf(stderr, "M11 AND/OR register operations failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    // The memory-destination forms must preserve the other bits and
+    // correctly update the sign/zero flags.
+    const auto andOrMemory = std::to_array<std::uint8_t>({
+        0xB8, 0x3F, 0, 0, 0,
+        0x89, 0x44, 0x24, 0xF8, // mov [rsp-8],eax
+        0xB9, 0x0A, 0, 0, 0,
+        0x21, 0x4C, 0x24, 0xF8, // and [rsp-8],ecx -> 10
+        0xB9, 0x20, 0, 0, 0,
+        0x09, 0x4C, 0x24, 0xF8, // or [rsp-8],ecx -> 42
+        0x8B, 0x44, 0x24, 0xF8,
+        0xC3
+    });
+    GuestCpu andOrMemoryCpu(andOrMemory, 64);
+    if (andOrMemoryCpu.run() != 42 || andOrMemoryCpu.readMemory32(56) != 42) {
+        std::fprintf(stderr, "M11 AND/OR memory operations failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+    // AND producing zero sets ZF and clears CF/OF.
+    const auto andZero = std::to_array<std::uint8_t>({
+        0xB8, 1, 0, 0, 0,
+        0xB9, 2, 0, 0, 0,
+        0x21, 0xC8,             // and eax,ecx -> zero
+        0x75, 0x01,             // jne invalid NOP
+        0xC3, 0x90
+    });
+    if (GuestCpu(andZero).run() != 0) {
+        std::fprintf(stderr, "M11 AND zero-flag regression failed at line %d\\n", __LINE__);
+        return EXIT_FAILURE;
+    }
+
     return EXIT_SUCCESS;
 }
