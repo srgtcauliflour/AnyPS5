@@ -97,5 +97,47 @@ int main() {
     rejected = false;
     try { GuestCpu(underflow, 16).run(); } catch (const std::runtime_error&) { rejected = true; }
     if (!rejected) return EXIT_FAILURE;
+
+    const std::array<std::uint8_t, 15> registerRoundtrip{
+        0xB8, 0x2A, 0, 0, 0,
+        0x89, 0xC1,
+        0xB8, 0, 0, 0, 0,
+        0x8B, 0xC1, 0xC3
+    };
+    if (GuestCpu(registerRoundtrip).run() != 42) return EXIT_FAILURE;
+    const std::array<std::uint8_t, 16> memoryRoundtrip{
+        0xB8, 0x2A, 0, 0, 0,
+        0x89, 0x04, 0x24,
+        0xB8, 0, 0, 0, 0,
+        0x8B, 0x04, 0x24,
+        0xC3
+    };
+    GuestCpu memRoundtrip(memoryRoundtrip, 64);
+    if (memRoundtrip.run() != 42) return EXIT_FAILURE;
+    const std::array<std::uint8_t, 18> displacementMov{
+        0xB8, 0x2A, 0, 0, 0,
+        0x89, 0x44, 0x24, 0xF8,
+        0xB8, 0, 0, 0, 0,
+        0x8B, 0x44, 0x24, 0xF8,
+        0xC3
+    };
+    if (GuestCpu(displacementMov, 64).run() != 42) return EXIT_FAILURE;
+    const std::array<std::uint8_t, 11> extendedMov{
+        0xB8, 0x2A, 0, 0, 0,
+        0x41, 0x89, 0xC0,
+        0x41, 0x8B, 0xC0
+    };
+    GuestCpu rexCpu(extendedMov);
+    rejected = false;
+    try { rexCpu.run(); } catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected || rexCpu.registerValue(8) != 42) return EXIT_FAILURE;
+    const std::array<std::uint8_t, 4> invalidAddress{0x8B, 0x04, 0x24, 0xC3};
+    rejected = false;
+    try { GuestCpu(invalidAddress, 64).run(); } catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) return EXIT_FAILURE;
+    const std::array<std::uint8_t, 2> truncatedModrm{0x8B, 0x04};
+    rejected = false;
+    try { GuestCpu(truncatedModrm).run(); } catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) return EXIT_FAILURE;
     return EXIT_SUCCESS;
 }
