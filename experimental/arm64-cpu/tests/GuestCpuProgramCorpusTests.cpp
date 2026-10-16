@@ -181,7 +181,7 @@ int main() {
         !check("ModRM XCHG other register", xchgModrmCpu.registerValue(1), 42))
         return EXIT_FAILURE;
 
-    const std::array<std::uint8_t, 21> xchgMemory{
+    const std::array<std::uint8_t, 24> xchgMemory{
         0xB8, 42, 0, 0, 0,
         0x89, 0x44, 0x24, 0xF8,
         0xB8, 7, 0, 0, 0,
