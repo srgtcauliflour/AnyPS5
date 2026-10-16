@@ -15,7 +15,9 @@ public:
     std::uint64_t registerValue(std::size_t index) const;
     std::size_t instructionPointer() const noexcept;
     std::uint64_t readMemory64(std::uint64_t address) const;
+    std::uint32_t readMemory32(std::uint64_t address) const;
     void writeMemory64(std::uint64_t address, std::uint64_t value);
+    void writeMemory32(std::uint64_t address, std::uint32_t value);
 private:
     std::vector<std::uint8_t> program_;
     std::vector<std::uint8_t> memory_;
@@ -24,6 +26,10 @@ private:
     bool zeroFlag_ = false;
     bool carryFlag_ = false;
     std::size_t callDepth_ = 0;
+    struct Operand { bool isRegister; std::size_t index; std::uint64_t address; };
+    Operand decodeOperand(std::uint8_t modrm, bool rexB, bool rexX);
+    std::uint64_t readOperand(const Operand& operand, bool wide) const;
+    void writeOperand(const Operand& operand, std::uint64_t value, bool wide);
     std::uint8_t read8();
     std::uint32_t read32();
     std::int32_t readSigned32();
