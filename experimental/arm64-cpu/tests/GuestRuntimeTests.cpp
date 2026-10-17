@@ -83,6 +83,24 @@ checked_guard:
     bad = relocated;
     bad.pop_back(); // truncated relocation table
     if (!rejects(bad)) return EXIT_FAILURE;
+    // Multi-function execution: call helper, which reads relocated data.
+    // call +1; ret; mov edi,<data>; mov eax,[rdi]; ret
+    std::vector<std::uint8_t> multi{'A','G','6','4'};
+    u32(multi, 2); u32(multi, 14); u32(multi, 4);
+    u32(multi, 0); u32(multi, 1);
+    multi.insert(multi.end(), {0xE8,0x01,0,0,0,0xC3,
+                               0xBF,0,0,0,0,0x8B,0x07,0xC3});
+    multi.insert(multi.end(), {91,0,0,0});
+    u32(multi, 7); u32(multi, 0);
+    if (GuestRuntime::load(multi).run() != 91) return EXIT_FAILURE;
+    // Reject duplicate relocation writes to the same immediate.
+    bad = multi;
+    bad[20] = 2; // two relocation records
+    u32(bad, 7); u32(bad, 0);
+    if (!rejects(bad)) return EXIT_FAILURE;
+    // Reject overlapping, non-identical relocation patches.
+    bad[bad.size() - 8] = 8;
+    if (!rejects(bad)) return EXIT_FAILURE;
     std::puts("AG64 image loader, data/stack isolation and malformed input tests passed");
     return EXIT_SUCCESS;
 }
