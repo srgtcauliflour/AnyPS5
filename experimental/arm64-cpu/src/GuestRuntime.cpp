@@ -32,7 +32,8 @@ GuestRuntime GuestRuntime::load(std::span<const std::uint8_t> image,
         relocCount > (image.size() - headerSize - codeSize - dataSize) / 8 ||
         image.size() != headerSize + codeSize + dataSize + relocCount * 8)
         throw std::invalid_argument("Invalid AG64 image sections or entry");
-    if (dataSize == 0 || dataSize % 4 != 0 || dataSize > (1u << 20) || stackSize < 128 ||
+    if (codeSize > (1u << 20) || dataSize == 0 || dataSize % 4 != 0 ||
+        dataSize > (1u << 20) || stackSize < 128 ||
         stackSize > (1u << 20))
         throw std::invalid_argument("Invalid AG64 data/stack size");
     const auto stackBase = static_cast<std::size_t>(dataBase) + dataSize + 4096;
@@ -46,6 +47,7 @@ GuestRuntime GuestRuntime::load(std::span<const std::uint8_t> image,
                 image.begin() + headerSize + codeSize);
     // AG64 v2 relocation: {u32 codeOffset, u32 targetDataOffset}.
     // Patch a 32-bit absolute guest-data pointer in the code section.
+    std::vector<bool> patched(codeSize, false);
     for (std::size_t i = 0; i < relocCount; ++i) {
         const auto record = headerSize + codeSize + dataSize + i * 8;
         const auto codeOffset = static_cast<std::size_t>(read32(record));
@@ -53,6 +55,11 @@ GuestRuntime GuestRuntime::load(std::span<const std::uint8_t> image,
         if (codeOffset > codeSize || codeSize - codeOffset < 4 ||
             dataOffset >= dataSize)
             throw std::invalid_argument("AG64 relocation out of bounds");
+        for (std::size_t byte = 0; byte < 4; ++byte) {
+            if (patched[codeOffset + byte])
+                throw std::invalid_argument("Overlapping AG64 relocations");
+            patched[codeOffset + byte] = true;
+        }
         const auto target = static_cast<std::uint32_t>(dataBase + dataOffset);
         for (unsigned byte = 0; byte < 4; ++byte)
             code[5 + codeOffset + byte] = static_cast<std::uint8_t>(target >> (8 * byte));
